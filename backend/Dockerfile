@@ -16,10 +16,17 @@ FROM eclipse-temurin:17-jre-alpine
 
 WORKDIR /app
 
+# Install kubectl
+RUN apk add --no-cache curl && \
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
+    chmod +x kubectl && \
+    mv kubectl /usr/local/bin/ && \
+    rm -rf /var/cache/apk/*
+
 # Copy jar-ul din builder stage
 COPY --from=builder /app/target/*.jar app.jar
 
-# Expose port (schimba 8080 daca aplicatia ta foloseste alt port)
+# Expose port (schimba 8080 daca aplikatia ta foloseste alt port)
 EXPOSE 8080
 
 # Environment variables (optional)

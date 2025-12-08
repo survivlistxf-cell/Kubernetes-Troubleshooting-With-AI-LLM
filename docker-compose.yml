@@ -12,11 +12,18 @@ services:
     environment:
       - JAVA_OPTS=-Xmx512m -Xms256m
       - SPRING_PROFILES_ACTIVE=docker
+      - KUBECONFIG=/root/.kube/config
+    volumes:
+      - ~/.kube/config:/root/.kube/config:ro
+      - ~/.kube:/root/.kube:ro
+    extra_hosts:
+      - "kubernetes.docker.internal:host-gateway"
+      - "host.docker.internal:host-gateway"
     networks:
       - proiect-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/hello"]
       interval: 30s
       timeout: 10s
       retries: 3

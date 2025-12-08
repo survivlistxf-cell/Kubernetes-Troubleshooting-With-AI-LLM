@@ -123,10 +123,14 @@ class ApiController {
 
     private boolean isKubectlInstalled() {
         try {
-            Process process = Runtime.getRuntime().exec(isWindows() ? new String[]{"where", "kubectl"} : new String[]{"which", "kubectl"});
+            // First try to run kubectl directly with full path for Linux container
+            Process process = Runtime.getRuntime().exec(new String[]{"/usr/local/bin/kubectl", "version"});
             process.waitFor();
-            return process.exitValue() == 0;
+            boolean result = process.exitValue() == 0;
+            System.out.println("kubectl check result: " + result);
+            return result;
         } catch (Exception e) {
+            System.err.println("kubectl not found: " + e.getMessage());
             return false;
         }
     }
@@ -137,7 +141,8 @@ class ApiController {
             if (isWindows()) {
                 process = Runtime.getRuntime().exec(new String[]{"cmd.exe", "/c", command});
             } else {
-                process = Runtime.getRuntime().exec(new String[]{"/bin/bash", "-c", command});
+                // Use /bin/sh for Alpine Linux compatibility (not /bin/bash)
+                process = Runtime.getRuntime().exec(new String[]{"/bin/sh", "-c", command});
             }
 
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));

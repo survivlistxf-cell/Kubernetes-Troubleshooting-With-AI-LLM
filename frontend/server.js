@@ -1,64 +1,42 @@
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
+const path = require('path');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname)));
 
-// Backend URL
-const BACKEND_URL = 'http://localhost:8080';
-
-// Routes
+// Serve static files (HTML, CSS, JS)
 app.get('/', (req, res) => {
-  res.json({
-    message: 'Welcome to Node.js Frontend Server',
-    version: '1.0.0'
-  });
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Proxy to Spring Boot Backend
-app.get('/api/hello', async (req, res) => {
-  try {
-    const response = await axios.get(`${BACKEND_URL}/api/hello`);
-    res.json({
-      message: response.data,
-      source: 'Spring Boot Backend'
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Failed to reach backend',
-      details: error.message
-    });
-  }
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'Frontend server is running!' });
 });
 
-// Get backend status
-app.get('/api/status', async (req, res) => {
-  try {
-    const response = await axios.get(`${BACKEND_URL}/api/status`);
-    res.json({
-      backend: response.data,
-      frontend: 'Node.js is running!'
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Backend is not available',
-      details: error.message
-    });
-  }
+// Proxy request to backend if needed
+app.post('/api/proxy', async (req, res) => {
+    try {
+        // This can be used to forward requests to backend if needed
+        res.json({ message: 'Proxy endpoint ready' });
+    } catch (error) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
 });
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+// 404 handler
+app.use((req, res) => {
+    res.status(404).sendFile(path.join(__dirname, 'index.html'));
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Node.js server running on http://localhost:${PORT}`);
-  console.log(`Backend URL: ${BACKEND_URL}`);
+    console.log(`🚀 Frontend server running on http://localhost:${PORT}`);
+    console.log(`📱 Open browser at http://localhost:${PORT}`);
 });

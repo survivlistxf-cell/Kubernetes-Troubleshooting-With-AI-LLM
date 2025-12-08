@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kubexplain - AI Assistant</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <h1>🚀 Kubexplain</h1>
+                </div>
+                <button class="toggle-sidebar" id="toggle-btn" title="Collapse Sidebar">
+                    <span>☰</span>
+                </button>
+            </div>
+            <nav class="nav-menu">
+                <button class="nav-item active" data-tab="home">
+                    <span class="icon">🏠</span>
+                    <span class="text">Home</span>
+                </button>
+                <button class="nav-item" data-tab="chat">
+                    <span class="icon">💬</span>
+                    <span class="text">Chat History</span>
+                </button>
+                <button class="nav-item" data-tab="pods">
+                    <span class="icon">📦</span>
+                    <span class="text">Pods Scanner</span>
+                </button>
+                <button class="nav-item" data-tab="nodes">
+                    <span class="icon">🖥️</span>
+                    <span class="text">Nodes Scanner</span>
+                </button>
+                <button class="nav-item" data-tab="settings">
+                    <span class="icon">⚙️</span>
+                    <span class="text">Settings</span>
+                </button>
+            </nav>
+            <div class="sidebar-footer">
+                <button class="btn-secondary">🚪 Logout</button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Home Tab -->
+            <div id="home" class="tab-content active">
+                <div class="welcome-container">
+                    <div class="welcome-header">
+                        <h2>👋 Hello! Welcome to Kubexplain!</h2>
+                        <p>Ask me anything about Kubernetes, Docker, or cloud infrastructure</p>
+                    </div>
+
+                    <div class="chat-container">
+                        <div id="messages" class="messages-area">
+                            <!-- Messages will appear here -->
+                        </div>
+                    </div>
+
+                    <div class="input-area">
+                        <form id="prompt-form" class="prompt-form">
+                            <textarea 
+                                id="prompt-input" 
+                                class="prompt-input" 
+                                placeholder="Ask me anything... (Shift+Enter for new line, Enter to send)"
+                                rows="1"
+                            ></textarea>
+                            <button type="submit" class="btn-send" title="Send (Enter)">
+                                <span>Send</span>
+                                <span class="icon">➤</span>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat History Tab -->
+            <div id="chat" class="tab-content">
+                <div class="chat-history">
+                    <h2>💬 Chat History</h2>
+                    <p style="text-align: center; opacity: 0.7; margin-top: 2rem;">No conversations yet</p>
+                </div>
+            </div>
+
+            <!-- Pods Scanner Tab -->
+            <div id="pods" class="tab-content">
+                <div class="pods-scanner">
+                    <h2>📦 Kubernetes Pods Scanner</h2>
+                    <p>Scan your system for running Kubernetes pods</p>
+                    
+                    <button id="scan-btn" class="btn-scan">🔍 Scan for Pods</button>
+                    
+                    <div id="scan-results" class="scan-results" style="display: none;">
+                        <h3>Scan Results:</h3>
+                        <div id="pods-list" class="pods-list">
+                            <!-- Pods will appear here -->
+                        </div>
+                    </div>
+                    
+                    <div id="scan-loading" class="scan-loading" style="display: none;">
+                        <p>Scanning system...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Nodes Scanner Tab -->
+            <div id="nodes" class="tab-content">
+                <div class="nodes-scanner">
+                    <h2>🖥️ Kubernetes Nodes Scanner</h2>
+                    <p>View all nodes in your Kubernetes cluster</p>
+                    
+                    <button id="scan-nodes-btn" class="btn-scan">🔍 Scan for Nodes</button>
+                    
+                    <div id="nodes-scan-results" class="scan-results" style="display: none;">
+                        <h3>Scan Results:</h3>
+                        <div id="nodes-list" class="nodes-list">
+                            <!-- Nodes will appear here -->
+                        </div>
+                    </div>
+                    
+                    <div id="nodes-scan-loading" class="scan-loading" style="display: none;">
+                        <p>Scanning cluster...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settings" class="tab-content">
+                <div class="settings-panel">
+                    <h2>⚙️ Settings</h2>
+                    <div class="settings-group">
+                        <label>
+                            <input type="checkbox" checked> Dark Mode
+                        </label>
+                        <label>
+                            <input type="checkbox" checked> Enable Notifications
+                        </label>
+                        <label>
+                            <input type="checkbox" checked> Auto-save conversations
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

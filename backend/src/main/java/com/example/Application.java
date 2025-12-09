@@ -123,14 +123,41 @@ class ApiController {
 
     private boolean isKubectlInstalled() {
         try {
-            // First try to run kubectl directly with full path for Linux container
-            Process process = Runtime.getRuntime().exec(new String[]{"/usr/local/bin/kubectl", "version"});
-            process.waitFor();
-            boolean result = process.exitValue() == 0;
-            System.out.println("kubectl check result: " + result);
-            return result;
+            // Try multiple kubectl locations
+            String[] kubectlPaths = {
+                "/usr/local/bin/kubectl",
+                "/usr/bin/kubectl",
+                "/snap/bin/kubectl"
+            };
+            
+            // First try standard paths
+            for (String path : kubectlPaths) {
+                try {
+                    Process process = Runtime.getRuntime().exec(new String[]{path, "version"});
+                    process.waitFor();
+                    if (process.exitValue() == 0) {
+                        System.out.println("kubectl found at: " + path);
+                        return true;
+                    }
+                } catch (Exception e) {
+                    // Continue to next path
+                }
+            }
+            
+            // Fallback: try 'which' command on Linux
+            if (!isWindows()) {
+                Process process = Runtime.getRuntime().exec(new String[]{"/bin/sh", "-c", "which kubectl"});
+                process.waitFor();
+                if (process.exitValue() == 0) {
+                    System.out.println("kubectl found via which command");
+                    return true;
+                }
+            }
+            
+            System.err.println("kubectl not found in any standard location");
+            return false;
         } catch (Exception e) {
-            System.err.println("kubectl not found: " + e.getMessage());
+            System.err.println("kubectl detection error: " + e.getMessage());
             return false;
         }
     }

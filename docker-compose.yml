@@ -16,6 +16,8 @@ services:
     volumes:
       - ~/.kube/config:/root/.kube/config:ro
       - ~/.kube:/root/.kube:ro
+      - /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro
+      - /usr/bin/kubectl:/usr/bin/kubectl:ro
     extra_hosts:
       - "kubernetes.docker.internal:host-gateway"
       - "host.docker.internal:host-gateway"

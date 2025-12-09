@@ -44,8 +44,7 @@ services:
     networks:
       - proiect-network
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
     restart: unless-stopped
 
 networks:

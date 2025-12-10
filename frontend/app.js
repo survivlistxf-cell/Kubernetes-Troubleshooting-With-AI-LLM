@@ -1,3 +1,8 @@
+// Determine Backend API URL - Use relative path for proxy
+const API_URL = '/api';
+
+console.log('🔍 Using API URL:', API_URL);
+
 // Sidebar Toggle
 const sidebar = document.getElementById('sidebar');
 const toggleBtn = document.getElementById('toggle-btn');
@@ -70,7 +75,7 @@ promptForm.addEventListener('submit', async (e) => {
     
     try {
         // Send to backend API
-        const response = await fetch('http://localhost:8080/api/chat', {
+        const response = await fetch(`${API_URL}/api/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -166,7 +171,7 @@ scanBtn.addEventListener('click', async () => {
     podsList.innerHTML = '';
 
     try {
-        const response = await fetch('http://localhost:8080/api/scan-pods', {
+        const response = await fetch(`${API_URL}/api/scan-pods`, {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json',
@@ -247,7 +252,7 @@ scanNodesBtn.addEventListener('click', async () => {
     nodesList.innerHTML = '';
 
     try {
-        const response = await fetch('http://localhost:8080/api/scan-nodes', {
+        const response = await fetch(`${API_URL}/api/scan-nodes`, {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json',

@@ -14,9 +14,9 @@ services:
       - SPRING_PROFILES_ACTIVE=docker
       - KUBECONFIG=/root/.kube/config
     volumes:
-      - ~/.kube/config:/root/.kube/config:ro
-      - ~/.kube:/root/.kube:ro
+      - /home/ubuntu/.kube/config:/root/.kube/config:ro
       - /usr/bin/kubectl:/usr/bin/kubectl:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     extra_hosts:
       - "kubernetes.docker.internal:host-gateway"
       - "host.docker.internal:host-gateway"

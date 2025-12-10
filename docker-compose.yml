@@ -10,9 +10,12 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - JAVA_OPTS=-Xmx512m -Xms256m
+      - JAVA_OPTS=-Xmx1536m -Xms768m
+      - MAVEN_OPTS=-Xmx1536m -Xms768m
       - SPRING_PROFILES_ACTIVE=docker
       - KUBECONFIG=/root/.kube/config
+    mem_limit: 2g
+    memswap_limit: 2g
     volumes:
       - /home/ubuntu/.kube/config:/root/.kube/config:ro
       - /usr/bin/kubectl:/usr/bin/kubectl:ro
@@ -29,6 +32,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+      start_period: 40s
 
   # Node.js Frontend
   frontend:
@@ -40,7 +44,10 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=512
       - REACT_APP_API_URL=http://backend:8080
+    mem_limit: 1g
+    memswap_limit: 1g
     networks:
       - proiect-network
     depends_on:

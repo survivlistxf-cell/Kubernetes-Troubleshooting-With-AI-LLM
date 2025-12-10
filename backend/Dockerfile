@@ -3,6 +3,9 @@ FROM maven:3.9-eclipse-temurin-17 AS builder
 
 WORKDIR /app
 
+# Set Maven memory options
+ENV MAVEN_OPTS="-Xmx1536m -Xms768m"
+
 # Copy pom.xml și scarica dependentele
 COPY pom.xml .
 RUN mvn dependency:go-offline
@@ -30,7 +33,7 @@ COPY --from=builder /app/target/*.jar app.jar
 EXPOSE 8080
 
 # Environment variables (optional)
-ENV JAVA_OPTS="-Xmx512m -Xms256m"
+ENV JAVA_OPTS="-Xmx1536m -Xms768m"
 
 # Run aplicatia
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

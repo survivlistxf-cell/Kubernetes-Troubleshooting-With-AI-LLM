@@ -3,7 +3,6 @@ package com.example;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -54,38 +53,28 @@ class ApiController {
         return "Backend is running!";
     }
 
-    @PostMapping("/api/chat")
-    public Map<String, String> chat(@RequestBody Map<String, String> request) {
-        String userMessage = request.get("message");
-        
-        // Simple AI response logic (can be replaced with real AI service)
-        String response = generateResponse(userMessage);
-        
-        Map<String, String> result = new HashMap<>();
-        result.put("response", response);
-        return result;
-    }
-
     @GetMapping("/api/scan-pods")
     public Map<String, Object> scanPods() {
         Map<String, Object> result = new HashMap<>();
         List<Map<String, String>> pods = new ArrayList<>();
 
         try {
-            // Check if kubectl is installed
-            if (!isKubectlInstalled()) {
-                result.put("error", "kubectl is not installed or not in PATH");
+            // First check if kubectl is available without waiting too long
+            if (!isKubectlInstalledQuick()) {
+                result.put("error", "kubectl not found - Kubernetes may not be configured");
                 result.put("pods", pods);
+                result.put("success", false);
                 return result;
             }
 
-            // Run kubectl get pods
+            // Run kubectl get pods with timeout
             String command = "kubectl get pods --all-namespaces -o wide";
-            String output = executeCommand(command);
+            String output = executeCommandWithTimeout(command, 10); // 10 second timeout
 
             if (output == null || output.isEmpty()) {
-                result.put("message", "No pods found or kubectl not accessible");
+                result.put("message", "No pods found or Kubernetes cluster not accessible");
                 result.put("pods", pods);
+                result.put("success", false);
                 return result;
             }
 
@@ -114,75 +103,67 @@ class ApiController {
             result.put("pods", pods);
             result.put("count", pods.size());
         } catch (Exception e) {
-            result.put("error", e.getMessage());
+            System.err.println("Scan pods error: " + e.getMessage());
+            result.put("error", "Error scanning pods: " + e.getMessage());
             result.put("pods", pods);
+            result.put("success", false);
         }
 
         return result;
     }
 
-    private boolean isKubectlInstalled() {
+    private boolean isKubectlInstalledQuick() {
         try {
-            // Try multiple kubectl locations
-            String[] kubectlPaths = {
-                "/usr/local/bin/kubectl",
-                "/usr/bin/kubectl",
-                "/snap/bin/kubectl"
-            };
+            // Quick check - just see if kubectl responds quickly
+            ProcessBuilder pb = new ProcessBuilder("kubectl", "version", "--client", "-o", "json");
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
             
-            // First try standard paths
-            for (String path : kubectlPaths) {
-                try {
-                    Process process = Runtime.getRuntime().exec(new String[]{path, "version"});
-                    process.waitFor();
-                    if (process.exitValue() == 0) {
-                        System.out.println("kubectl found at: " + path);
-                        return true;
-                    }
-                } catch (Exception e) {
-                    // Continue to next path
-                }
+            // Wait max 3 seconds
+            boolean finished = process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                return false;
             }
             
-            // Fallback: try 'which' command on Linux
-            if (!isWindows()) {
-                Process process = Runtime.getRuntime().exec(new String[]{"/bin/sh", "-c", "which kubectl"});
-                process.waitFor();
-                if (process.exitValue() == 0) {
-                    System.out.println("kubectl found via which command");
-                    return true;
-                }
-            }
-            
-            System.err.println("kubectl not found in any standard location");
-            return false;
+            return process.exitValue() == 0;
         } catch (Exception e) {
-            System.err.println("kubectl detection error: " + e.getMessage());
+            System.err.println("kubectl quick check failed: " + e.getMessage());
             return false;
         }
     }
 
-    private String executeCommand(String command) {
+    private String executeCommandWithTimeout(String command, int timeoutSeconds) {
         try {
-            Process process;
+            ProcessBuilder pb;
             if (isWindows()) {
-                process = Runtime.getRuntime().exec(new String[]{"cmd.exe", "/c", command});
+                pb = new ProcessBuilder("cmd.exe", "/c", command);
             } else {
-                // Use /bin/sh for Alpine Linux compatibility (not /bin/bash)
-                process = Runtime.getRuntime().exec(new String[]{"/bin/sh", "-c", command});
+                pb = new ProcessBuilder("/bin/sh", "-c", command);
             }
-
+            
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            
+            // Wait with timeout
+            boolean finished = process.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
+            
+            if (!finished) {
+                process.destroyForcibly();
+                System.err.println("Command timeout after " + timeoutSeconds + " seconds");
+                return null;
+            }
+            
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             StringBuilder output = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
                 output.append(line).append("\n");
             }
-
-            process.waitFor();
+            
             return output.toString();
         } catch (Exception e) {
-            System.err.println("Error executing command: " + e.getMessage());
+            System.err.println("Error executing command with timeout: " + e.getMessage());
             return null;
         }
     }
@@ -198,20 +179,22 @@ class ApiController {
         List<Map<String, String>> nodes = new ArrayList<>();
 
         try {
-            // Check if kubectl is installed
-            if (!isKubectlInstalled()) {
-                result.put("error", "kubectl is not installed or not in PATH");
+            // First check if kubectl is available without waiting too long
+            if (!isKubectlInstalledQuick()) {
+                result.put("error", "kubectl not found - Kubernetes may not be configured");
                 result.put("nodes", nodes);
+                result.put("success", false);
                 return result;
             }
 
-            // Run kubectl get nodes
+            // Run kubectl get nodes with timeout
             String command = "kubectl get nodes -o wide";
-            String output = executeCommand(command);
+            String output = executeCommandWithTimeout(command, 10); // 10 second timeout
 
             if (output == null || output.isEmpty()) {
-                result.put("message", "No nodes found or kubectl not accessible");
+                result.put("message", "No nodes found or Kubernetes cluster not accessible");
                 result.put("nodes", nodes);
+                result.put("success", false);
                 return result;
             }
 
@@ -239,8 +222,10 @@ class ApiController {
             result.put("nodes", nodes);
             result.put("count", nodes.size());
         } catch (Exception e) {
-            result.put("error", e.getMessage());
+            System.err.println("Scan nodes error: " + e.getMessage());
+            result.put("error", "Error scanning nodes: " + e.getMessage());
             result.put("nodes", nodes);
+            result.put("success", false);
         }
 
         return result;

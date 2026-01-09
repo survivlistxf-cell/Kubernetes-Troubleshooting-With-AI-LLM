@@ -1,6 +1,29 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: proiect-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: kubexplain_db
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - proiect-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # Spring Boot Backend
   backend:
     build:
@@ -14,6 +37,10 @@ services:
       - MAVEN_OPTS=-Xmx1536m -Xms768m
       - SPRING_PROFILES_ACTIVE=docker
       - KUBECONFIG=/root/.kube/config
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/kubexplain_db
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=postgres
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
     mem_limit: 2g
     memswap_limit: 2g
     volumes:
@@ -25,13 +52,15 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - proiect-network
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/hello"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
       start_period: 40s
 
   # Node.js Frontend
@@ -46,6 +75,7 @@ services:
       - NODE_ENV=production
       - NODE_OPTIONS=--max-old-space-size=512
       - REACT_APP_API_URL=http://backend:8080
+      - BACKEND_URL=http://backend:8080
     mem_limit: 1g
     memswap_limit: 1g
     networks:
@@ -57,3 +87,7 @@ services:
 networks:
   proiect-network:
     driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local

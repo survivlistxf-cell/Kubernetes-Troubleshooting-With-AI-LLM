@@ -205,17 +205,65 @@ html, body {
 }
 
 .sidebar-footer {
-  padding-top: 1rem;
+  padding-top: auto;
   border-top: 1px solid var(--ash-grey);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 }
 
+/* Primary Button (Login) */
+#auth-btn {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background-color: var(--frosted-mint);
+  color: var(--pitch-black);
+  border: 2px solid var(--frosted-mint);
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+#auth-btn:hover {
+  background-color: var(--yellow-green);
+  border-color: var(--yellow-green);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(133, 203, 51, 0.3);
+}
+
+#auth-btn:active {
+  transform: translateY(0);
+}
+
+.sidebar.collapsed #auth-btn {
+  padding: 0.75rem 0.5rem;
+  font-size: 0;
+  border-color: var(--frosted-mint);
+  background-color: transparent;
+  color: var(--frosted-mint);
+}
+
+.sidebar.collapsed #auth-btn::before {
+  content: '👤';
+  font-size: 1.3rem;
+  margin: 0;
+}
+
+/* Secondary Button (Logout) */
 .btn-secondary {
   width: 100%;
   padding: 0.75rem 1rem;
   background-color: transparent;
   color: var(--frosted-mint);
   border: 2px solid var(--frosted-mint);
-  border-radius: 0.5rem;
+  border-radius: 8px;
   cursor: pointer;
   font-weight: 500;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -234,11 +282,23 @@ html, body {
 }
 
 .btn-secondary:hover {
-  background-color: var(--yellow-green);
-  color: var(--pitch-black);
+  background-color: rgba(133, 203, 51, 0.1);
+  color: var(--yellow-green);
   border-color: var(--yellow-green);
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(133, 203, 51, 0.2);
+}
+
+/* User Info Display */
+#user-info {
+  text-align: center;
+  color: var(--frosted-mint);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.5rem 0;
+  border-top: 1px solid rgba(165, 203, 195, 0.3);
+  margin-top: 0.5rem;
+  opacity: 0.9;
 }
 
 /* Main Content */
@@ -832,4 +892,449 @@ html, body {
   .btn-send {
     width: 100%;
   }
+}
+
+/* Auth Modal Styles */
+.auth-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: var(--dark-khaki);
+  border: 3px solid var(--yellow-green);
+  border-radius: 16px;
+  padding: 0;
+  max-width: 450px;
+  width: 90%;
+  z-index: 1000;
+  box-shadow: 0 20px 60px rgba(16, 11, 0, 0.5),
+              inset 0 1px 0 rgba(239, 255, 200, 0.1);
+  animation: slideInScale 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  overflow: hidden;
+}
+
+/* Shared modal card shell (used by action modals too, without inheriting .auth-modal positioning/animation) */
+.modal-shell {
+  background-color: var(--dark-khaki);
+  border: 3px solid var(--yellow-green);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(16, 11, 0, 0.55),
+              inset 0 1px 0 rgba(239, 255, 200, 0.08);
+  overflow: hidden;
+}
+
+/* IMPORTANT: Action modals (title/delete) reuse `.auth-modal` in HTML.
+   We must override the auth-modal centering (top/left/transform/max-width)
+   because action modals are full-screen flex containers. */
+.auth-modal.action-modal {
+  top: auto;
+  left: auto;
+  transform: none;
+  max-width: none;
+  width: auto;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  overflow: visible;
+  /* IMPORTANT: don't use the auth modal animation (it depends on translate(-50%, -50%)) */
+  animation: none;
+}
+
+@keyframes slideInScale {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(16, 11, 0, 0.7);
+  z-index: 1200;
+  pointer-events: auto;
+  backdrop-filter: blur(2px);
+  animation: fadeInOverlay 0.3s ease;
+}
+
+@keyframes fadeInOverlay {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modal-content {
+  animation: fadeInContent 0.4s ease 0.1s both;
+}
+
+/* Action modal content should animate without affecting layout/centering */
+.action-modal > .modal-content {
+  animation: popInCenter 180ms ease-out both;
+}
+
+@keyframes popInCenter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Custom action modals (title/delete) - true center + slightly bigger */
+.action-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1210;
+  pointer-events: auto;
+  padding: 24px;
+}
+
+/* When a modal is open, keep it comfortably centered on small screens too */
+.action-modal > .modal-content {
+  pointer-events: auto;
+  margin: 0;
+  max-width: 560px;
+  width: min(92vw, 560px);
+  max-height: min(85vh, 720px);
+  overflow: auto;
+}
+
+/* Slightly tighter header for action modals */
+.action-modal .modal-header {
+  padding: 1.25rem 1.5rem;
+}
+
+.action-modal .modal-header h2 {
+  font-size: 1.35rem;
+}
+
+/* Make the button row wrap nicely on narrow widths */
+.action-modal .modal-content .auth-form > div[style*="justify-content:flex-end"],
+.action-modal .modal-content .auth-form > div[style*="justify-content: flex-end"],
+.action-modal .modal-content .auth-form > div[style*="justify-content:flex-end"],
+.action-modal .modal-content .auth-form > div[style*="justify-content: flex-end"],
+.action-modal .modal-content .auth-form > div[style*="justify-content:flex-end"],
+.action-modal .modal-content .auth-form > div[style*="justify-content: flex-end"],
+.action-modal .modal-content .auth-form div[style*="justify-content:flex-end"],
+.action-modal .modal-content .auth-form div[style*="justify-content: flex-end"],
+.action-modal .modal-content .auth-form > div[style*="justify-content"],
+.action-modal .modal-content .auth-form div[style*="justify-content"] {
+  flex-wrap: wrap;
+}
+
+/* Better keyboard accessibility */
+.modal-close:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: 3px solid rgba(133, 203, 51, 0.6);
+  outline-offset: 3px;
+}
+
+@media (max-width: 480px) {
+  .action-modal {
+    padding: 16px;
+  }
+
+  .action-modal .modal-header {
+    padding: 1rem 1.1rem;
+  }
+
+  .action-modal .auth-form {
+    padding: 1.1rem;
+  }
+}
+
+.action-icon-btn {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  border-radius: 10px;
+  transition: transform 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.action-icon-btn:hover {
+  transform: translateY(-1px);
+  background-color: rgba(239, 255, 200, 0.12);
+  border-color: rgba(239, 255, 200, 0.35);
+}
+
+.action-icon-btn:active {
+  transform: translateY(0);
+}
+
+.action-icon-btn.delete:hover {
+  background-color: rgba(255, 99, 99, 0.18);
+  border-color: rgba(255, 99, 99, 0.45);
+}
+
+@keyframes fadeInContent {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: linear-gradient(135deg, rgba(133, 203, 51, 0.15) 0%, rgba(165, 203, 195, 0.1) 100%);
+  padding: 2rem;
+  border-bottom: 2px solid var(--yellow-green);
+  gap: 1rem;
+}
+
+.modal-header h2 {
+  color: var(--yellow-green);
+  font-size: 1.8rem;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.5px;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 2rem;
+  color: var(--frosted-mint);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: all 0.2s ease;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.modal-close:hover {
+  opacity: 1;
+  transform: rotate(90deg);
+  background-color: rgba(133, 203, 51, 0.1);
+  border-radius: 50%;
+}
+
+/* Action buttons row for modals (edit/delete) */
+.modal-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: nowrap;
+  margin-top: 0.5rem;
+}
+
+/* Ensure consistent button sizing in modal actions */
+.modal-actions .btn-primary,
+.modal-actions .btn-secondary {
+  min-width: 140px;
+  flex: 0 1 auto;
+}
+
+.modal-actions .btn-danger {
+  min-width: 140px;
+  flex: 0 1 auto;
+}
+
+@media (max-width: 420px) {
+  .modal-actions {
+    flex-wrap: wrap;
+  }
+
+  .modal-actions .btn-primary,
+  .modal-actions .btn-secondary,
+  .modal-actions .btn-danger {
+    width: 100%;
+  }
+}
+
+/* Danger button variant (for destructive actions) */
+.btn-danger {
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, #ff6b6b 0%, #ff4d4d 100%);
+  color: var(--pitch-black);
+  border: 2px solid #ff6b6b;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+.btn-danger:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(255, 99, 99, 0.35);
+  filter: saturate(1.05);
+}
+
+.btn-danger:active {
+  transform: translateY(0);
+  box-shadow: 0 6px 14px rgba(255, 99, 99, 0.25);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 2rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.form-group label {
+  color: var(--frosted-mint);
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+
+.form-group input {
+  padding: 0.9rem 1rem;
+  border: 2px solid var(--ash-grey);
+  border-radius: 8px;
+  background-color: var(--frosted-mint);
+  color: var(--pitch-black);
+  font-size: 1rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  font-weight: 500;
+}
+
+.form-group input::placeholder {
+  color: rgba(165, 203, 195, 0.7);
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: var(--yellow-green);
+  box-shadow: 0 0 0 3px rgba(133, 203, 51, 0.2),
+              inset 0 0 0 1px rgba(133, 203, 51, 0.1);
+  background-color: #fafff0;
+}
+
+.form-group input::placeholder {
+  color: var(--ash-grey);
+}
+
+/* Submit Button in Modal */
+.auth-form button[type="submit"] {
+  padding: 1rem;
+  background: linear-gradient(135deg, var(--frosted-mint) 0%, #f0fff0 100%);
+  color: var(--pitch-black);
+  border: none;
+  border-radius: 8px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  margin-top: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 12px rgba(239, 255, 200, 0.2);
+}
+
+.auth-form button[type="submit"]:hover {
+  background: linear-gradient(135deg, var(--yellow-green) 0%, #9de64f 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(133, 203, 51, 0.4);
+}
+
+.auth-form button[type="submit"]:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(133, 203, 51, 0.3);
+}
+
+.auth-form button[type="submit"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.form-footer {
+  text-align: center;
+  color: var(--frosted-mint);
+  font-size: 0.9rem;
+  margin: 0.5rem 0 0 0;
+  opacity: 0.9;
+}
+
+.form-footer a {
+  color: var(--yellow-green);
+  text-decoration: none;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.form-footer a:hover {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-message {
+  padding: 1rem;
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.95rem;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.auth-message.error {
+  background-color: rgba(220, 38, 38, 0.15);
+  color: #ff7f7f;
+  border: 2px solid rgba(220, 38, 38, 0.4);
+  border-left: 4px solid #dc2626;
+}
+
+.auth-message.success {
+  background-color: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 2px solid rgba(34, 197, 94, 0.4);
+  border-left: 4px solid #22c55e;
 }

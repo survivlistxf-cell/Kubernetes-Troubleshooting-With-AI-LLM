@@ -1,0 +1,11 @@
+{
+  "folders": [
+    { "path": "." },
+    { "path": "backend" },
+    { "path": "Server" }
+  ],
+  "settings": {
+    // Ensure the Java extension imports Maven projects from both modules.
+    "java.configuration.updateBuildConfiguration": "interactive"
+  }
+}

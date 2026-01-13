@@ -577,6 +577,25 @@ const scanLoading = document.getElementById('scan-loading');
 const podsList = document.getElementById('pods-list');
 const podsAddToChatBtn = document.getElementById('pods-add-to-chat-btn');
 
+// Pod Details modal elements
+const podDetailsModal = document.getElementById('pod-details-modal');
+const podDetailsOverlay = document.getElementById('pod-details-modal-overlay');
+const podDetailsCloseBtn = document.getElementById('pod-details-close');
+const podDetailsCancelBtn = document.getElementById('pod-details-cancel');
+const podDetailsTitle = document.getElementById('pod-details-title');
+const podDetailsMeta = document.getElementById('pod-details-meta');
+const podDetailsDescribePre = document.getElementById('pod-details-describe');
+const podDetailsJsonPre = document.getElementById('pod-details-json');
+const podDetailsEventsPre = document.getElementById('pod-details-events');
+const podDetailsLogsPre = document.getElementById('pod-details-logs');
+const podDetailsAddContextBtn = document.getElementById('pod-details-add-context');
+
+const podTabButtons = Array.from(document.querySelectorAll('#pod-details-modal .pod-tab-btn'));
+const podTabPanels = Array.from(document.querySelectorAll('#pod-details-modal .pod-tab-panel'));
+
+let selectedPodForDetails = null;
+let selectedPodDetailsPayload = null;
+
 let lastScannedPods = [];
 
 function generateConversationId() {
@@ -693,6 +712,191 @@ function buildPodsContextPayload(level, pods) {
     };
 }
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+}
+
+function prettyJson(value) {
+    try {
+        if (value == null) return '';
+        if (typeof value === 'string') {
+            // If server already returned a block of text, keep it.
+            const trimmed = value.trim();
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                return JSON.stringify(JSON.parse(trimmed), null, 2);
+            }
+            return value;
+        }
+        return JSON.stringify(value, null, 2);
+    } catch {
+        return String(value);
+    }
+}
+
+function renderPodDetailsMeta(pod, details) {
+    if (!podDetailsMeta) return;
+    const items = [
+        { k: 'Namespace', v: pod?.namespace || details?.namespace || 'default' },
+        { k: 'Name', v: pod?.name || details?.name || 'unknown' },
+        { k: 'Status', v: pod?.status || details?.status || 'N/A' },
+        { k: 'Node', v: pod?.node || details?.node || 'N/A' },
+        { k: 'Ready', v: pod?.ready || 'N/A' },
+        { k: 'Restarts', v: pod?.restarts ?? 'N/A' },
+        { k: 'Age', v: pod?.age || 'N/A' }
+    ];
+    podDetailsMeta.innerHTML = items
+        .filter(i => i.v !== undefined && i.v !== null && String(i.v).trim() !== '')
+        .map(i => `<span class="pod-details-badge"><strong>${escapeHtml(i.k)}:</strong> ${escapeHtml(i.v)}</span>`)
+        .join('');
+}
+
+function openPodDetailsModal() {
+    if (podDetailsModal) podDetailsModal.style.display = 'flex';
+    if (podDetailsOverlay) podDetailsOverlay.style.display = 'block';
+}
+
+function closePodDetailsModal() {
+    if (podDetailsModal) podDetailsModal.style.display = 'none';
+    if (podDetailsOverlay) podDetailsOverlay.style.display = 'none';
+    selectedPodForDetails = null;
+    selectedPodDetailsPayload = null;
+    if (podDetailsDescribePre) podDetailsDescribePre.textContent = '';
+    if (podDetailsJsonPre) podDetailsJsonPre.textContent = '';
+    if (podDetailsEventsPre) podDetailsEventsPre.textContent = '';
+    if (podDetailsLogsPre) podDetailsLogsPre.textContent = '';
+    if (podDetailsMeta) podDetailsMeta.innerHTML = '';
+
+    // Reset to Describe tab
+    setActivePodTab('describe');
+}
+
+podDetailsCloseBtn?.addEventListener('click', closePodDetailsModal);
+podDetailsCancelBtn?.addEventListener('click', closePodDetailsModal);
+podDetailsOverlay?.addEventListener('click', closePodDetailsModal);
+
+// ESC close for details modal (doesn't interfere with title/delete modals)
+document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    const open = podDetailsModal?.style?.display && podDetailsModal.style.display !== 'none';
+    if (open) closePodDetailsModal();
+});
+
+function setActivePodTab(tab) {
+    const t = String(tab || 'describe');
+    podTabButtons.forEach(b => {
+        const isActive = b.dataset.tab === t;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    podTabPanels.forEach(p => {
+        const isActive = p.dataset.panel === t;
+        p.classList.toggle('active', isActive);
+        p.hidden = !isActive;
+    });
+}
+
+podTabButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        setActivePodTab(btn.dataset.tab);
+    });
+});
+
+async function fetchPodDetails({ namespace, name }) {
+    const params = new URLSearchParams();
+    if (namespace) params.set('namespace', namespace);
+    if (name) params.set('name', name);
+    const resp = await fetch(`${API_URL}/pod-details?${params.toString()}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await parseJsonSafely(resp);
+    if (!resp.ok) {
+        const msg = data?.error || data?.message || resp.statusText || 'Failed to fetch pod details';
+        throw new Error(msg);
+    }
+    return data;
+}
+
+function buildSinglePodContextPayload(pod, detailsPayload) {
+    const conversationId = getOrCreateConversationId();
+    const userId = localStorage.getItem('userId');
+    const nowIso = new Date().toISOString();
+
+    // Namespace/name can live in multiple places depending on how details are shaped (raw kubectl json, wrapped payload,
+    // or just the selected pod object). Make this resilient so we don't end up with default/unknown.
+    const detailsNs = detailsPayload?.namespace
+        || detailsPayload?.podJson?.metadata?.namespace
+        || detailsPayload?.pod_json?.metadata?.namespace
+        || detailsPayload?.podJson?.metadata?.namespace
+        || detailsPayload?.metadata?.namespace;
+
+    const detailsName = detailsPayload?.name
+        || detailsPayload?.podJson?.metadata?.name
+        || detailsPayload?.pod_json?.metadata?.name
+        || detailsPayload?.podJson?.metadata?.name
+        || detailsPayload?.metadata?.name;
+
+    const ns = (pod?.namespace ?? detailsNs ?? '').toString().trim() || 'default';
+    const name = (pod?.name ?? detailsName ?? '').toString().trim() || 'unknown-pod';
+
+    // Keep a normalized view of the details payload too (helps downstream and makes debugging easier).
+    const normalizedDetails = detailsPayload
+        ? {
+            ...detailsPayload,
+            namespace: detailsPayload?.namespace ?? detailsNs ?? ns,
+            name: detailsPayload?.name ?? detailsName ?? name
+        }
+        : null;
+
+    const detailBlock = {
+        summary: {
+            namespace: ns,
+            name,
+            status: pod?.status || 'N/A',
+            ready: pod?.ready || 'N/A',
+            restarts: pod?.restarts ?? 'N/A',
+            age: pod?.age || 'N/A',
+            node: pod?.node || 'N/A',
+            containers: pod?.containers || 'N/A'
+        },
+        details: normalizedDetails
+    };
+
+    return {
+        protocol_version: 'kdiag/1.0',
+        conversation_id: conversationId,
+        source: 'frontend/pods-details-modal',
+        user_id: userId || null,
+        message: {
+            role: 'user',
+            text: `Pod context added: ${ns}/${name}`
+        },
+        context: {
+            cluster: {
+                namespace: ns,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null
+            },
+            targets: [{ kind: 'Pod', name, namespace: ns }]
+        },
+        artifacts: [{
+            type: 'pod_details',
+            captured_at: nowIso,
+            level: 1,
+            content: detailBlock
+        }],
+        preferences: {
+            verbosity: 'high',
+            risk_mode: 'safe',
+            redact_secrets: true
+        }
+    };
+}
+
 async function sendPodsContextToServer(payload) {
     const path = `${API_URL}/context`;
     const response = await fetch(path, {
@@ -775,8 +979,72 @@ scanBtn.addEventListener('click', async () => {
                                 <span>${pod.age}</span>
                             </div>` : ''}
                         </div>
+                        <button class="btn-details" type="button" data-pod-namespace="${escapeHtml(pod.namespace)}" data-pod-name="${escapeHtml(pod.name)}">🔎 Details</button>
                     `;
                     podsList.appendChild(podDiv);
+                });
+
+                // Delegate Details button clicks
+                podsList.querySelectorAll('button.btn-details').forEach(btn => {
+                    btn.addEventListener('click', async (ev) => {
+                        const ns = ev.currentTarget?.dataset?.podNamespace;
+                        const name = ev.currentTarget?.dataset?.podName;
+                        const pod = (lastScannedPods || []).find(p => String(p.name) === String(name) && String(p.namespace) === String(ns))
+                            || { namespace: ns, name };
+
+                        // Keep a clean identity snapshot for later (e.g., Add Context button).
+                        selectedPodForDetails = {
+                            namespace: pod?.namespace ?? ns,
+                            name: pod?.name ?? name,
+                            status: pod?.status,
+                            node: pod?.node,
+                            ready: pod?.ready,
+                            restarts: pod?.restarts,
+                            age: pod?.age,
+                            containers: pod?.containers
+                        };
+                        selectedPodDetailsPayload = null;
+
+                        if (podDetailsTitle) {
+                            podDetailsTitle.textContent = `Pod details: ${ns}/${name}`;
+                        }
+
+                        renderPodDetailsMeta(pod, null);
+                        setActivePodTab('describe');
+                        if (podDetailsDescribePre) podDetailsDescribePre.textContent = 'Loading details...';
+                        if (podDetailsJsonPre) podDetailsJsonPre.textContent = '';
+                        if (podDetailsEventsPre) podDetailsEventsPre.textContent = '';
+                        if (podDetailsLogsPre) podDetailsLogsPre.textContent = '';
+
+                        openPodDetailsModal();
+
+                        try {
+                            const details = await fetchPodDetails({ namespace: ns, name });
+                            selectedPodDetailsPayload = details;
+                            renderPodDetailsMeta(pod, details);
+                            const describe = details?.describe || '(no describe output)';
+                            const podJson = details?.podJson || details?.pod_json || null;
+                            const events = details?.events || '(no events output)';
+                            const logs = details?.logs || '(no logs output)';
+
+                            if (podDetailsDescribePre) {
+                                podDetailsDescribePre.textContent = `# kubectl describe pod ${name} -n ${ns}\n${describe}`;
+                            }
+                            if (podDetailsJsonPre) {
+                                podDetailsJsonPre.textContent = `# kubectl get pod ${name} -n ${ns} -o json\n${prettyJson(podJson)}`;
+                            }
+                            if (podDetailsEventsPre) {
+                                podDetailsEventsPre.textContent = `# kubectl get events -n ${ns} --field-selector involvedObject.name=${name}\n${events}`;
+                            }
+                            if (podDetailsLogsPre) {
+                                podDetailsLogsPre.textContent = `# kubectl logs ${name} -n ${ns} --tail=200\n${logs}`;
+                            }
+                        } catch (e) {
+                            if (podDetailsDescribePre) {
+                                podDetailsDescribePre.textContent = `Failed to load pod details: ${e?.message || e}`;
+                            }
+                        }
+                    });
                 });
             } else {
                 lastScannedPods = [];
@@ -805,6 +1073,46 @@ scanBtn.addEventListener('click', async () => {
     } finally {
         scanBtn.disabled = false;
         scanBtn.style.opacity = '1';
+    }
+});
+
+podDetailsAddContextBtn?.addEventListener('click', async () => {
+    if (!selectedPodForDetails) return;
+
+    podDetailsAddContextBtn.disabled = true;
+    podDetailsAddContextBtn.style.opacity = '0.6';
+
+    try {
+        const payload = buildSinglePodContextPayload(selectedPodForDetails, selectedPodDetailsPayload);
+        // Debug (kept intentionally small): helps trace why ns/name might fall back.
+        console.log('[pods] add-context payload', {
+            selectedPodForDetails,
+            detailsKeys: selectedPodDetailsPayload ? Object.keys(selectedPodDetailsPayload) : null,
+            messageText: payload?.message?.text,
+            target: payload?.context?.targets?.[0]
+        });
+        await sendPodsContextToServer(payload);
+
+        closePodDetailsModal();
+
+        // Switch to chat Home and show feedback
+        hideWelcomeHeader();
+        autoCollapseSidebar();
+        switchToTab('home');
+        // Display exactly what we sent in payload.message.text (avoids drift between UI and payload).
+        const displayText = payload?.message?.text ? `✅ ${payload.message.text}` : '✅ Pod context added';
+        addMessage(displayText, 'user');
+    } catch (e) {
+        console.error('[pods] Failed to add pod context', e);
+        hideWelcomeHeader();
+        autoCollapseSidebar();
+        switchToTab('home');
+        const ns = selectedPodForDetails?.namespace || selectedPodDetailsPayload?.namespace || 'default';
+        const name = selectedPodForDetails?.name || selectedPodDetailsPayload?.name || 'unknown-pod';
+        addMessage(`❌ Pod context NOT added (${ns}/${name}): ${e?.message || 'unknown error'}`, 'user');
+    } finally {
+        podDetailsAddContextBtn.disabled = false;
+        podDetailsAddContextBtn.style.opacity = '1';
     }
 });
 
@@ -865,12 +1173,170 @@ const nodesScanResults = document.getElementById('nodes-scan-results');
 const nodesScanLoading = document.getElementById('nodes-scan-loading');
 const nodesList = document.getElementById('nodes-list');
 
+// Node Details modal elements
+const nodeDetailsModal = document.getElementById('node-details-modal');
+const nodeDetailsOverlay = document.getElementById('node-details-modal-overlay');
+const nodeDetailsCloseBtn = document.getElementById('node-details-close');
+const nodeDetailsCancelBtn = document.getElementById('node-details-cancel');
+const nodeDetailsTitle = document.getElementById('node-details-title');
+const nodeDetailsMeta = document.getElementById('node-details-meta');
+const nodeDetailsDescribePre = document.getElementById('node-details-describe');
+const nodeDetailsJsonPre = document.getElementById('node-details-json');
+const nodeDetailsEventsPre = document.getElementById('node-details-events');
+
+const nodeTabButtons = Array.from(document.querySelectorAll('#node-details-modal .pod-tab-btn'));
+const nodeTabPanels = Array.from(document.querySelectorAll('#node-details-modal .pod-tab-panel'));
+
+let lastScannedNodes = [];
+let selectedNodeForDetails = null;
+let selectedNodeDetailsPayload = null;
+let selectedNodeDetailsMode = 'fast';
+let isLoadingNodeDetails = false;
+
+function renderNodeDetailsMeta(node, details) {
+    if (!nodeDetailsMeta) return;
+    const items = [
+        { k: 'Name', v: node?.name || details?.name || 'unknown' },
+        { k: 'Status', v: node?.status || details?.status || 'N/A' },
+        { k: 'Roles', v: node?.roles || 'N/A' },
+        { k: 'Age', v: node?.age || 'N/A' },
+        { k: 'Version', v: node?.version || 'N/A' },
+        { k: 'Internal IP', v: node?.internalIp || node?.internal_ip || 'N/A' },
+        { k: 'External IP', v: node?.externalIp || node?.external_ip || 'N/A' }
+    ];
+    nodeDetailsMeta.innerHTML = items
+        .filter(i => i.v !== undefined && i.v !== null && String(i.v).trim() !== '')
+        .map(i => `<span class="pod-details-badge"><strong>${escapeHtml(i.k)}:</strong> ${escapeHtml(i.v)}</span>`)
+        .join('');
+}
+
+function openNodeDetailsModal() {
+    if (nodeDetailsModal) nodeDetailsModal.style.display = 'flex';
+    if (nodeDetailsOverlay) nodeDetailsOverlay.style.display = 'block';
+}
+
+function closeNodeDetailsModal() {
+    if (nodeDetailsModal) nodeDetailsModal.style.display = 'none';
+    if (nodeDetailsOverlay) nodeDetailsOverlay.style.display = 'none';
+    selectedNodeForDetails = null;
+    selectedNodeDetailsPayload = null;
+    selectedNodeDetailsMode = 'fast';
+    isLoadingNodeDetails = false;
+    if (nodeDetailsDescribePre) nodeDetailsDescribePre.textContent = '';
+    if (nodeDetailsJsonPre) nodeDetailsJsonPre.textContent = '';
+    if (nodeDetailsEventsPre) nodeDetailsEventsPre.textContent = '';
+    if (nodeDetailsMeta) nodeDetailsMeta.innerHTML = '';
+    setActiveNodeTab('describe');
+}
+
+nodeDetailsCloseBtn?.addEventListener('click', closeNodeDetailsModal);
+nodeDetailsCancelBtn?.addEventListener('click', closeNodeDetailsModal);
+nodeDetailsOverlay?.addEventListener('click', closeNodeDetailsModal);
+
+// ESC close for node details modal (doesn't interfere with title/delete/pod modals)
+document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    const open = nodeDetailsModal?.style?.display && nodeDetailsModal.style.display !== 'none';
+    if (open) closeNodeDetailsModal();
+});
+
+function setActiveNodeTab(tab) {
+    const t = String(tab || 'describe');
+    nodeTabButtons.forEach(b => {
+        const isActive = b.dataset.tab === t;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    nodeTabPanels.forEach(p => {
+        const isActive = p.dataset.panel === t;
+        p.classList.toggle('active', isActive);
+        p.hidden = !isActive;
+    });
+}
+
+nodeTabButtons.forEach(btn => {
+    btn.addEventListener('click', async () => {
+        const tab = btn.dataset.tab;
+        setActiveNodeTab(tab);
+
+        // Describe/Events can be slow, so backend defaults to fast mode.
+        // When user explicitly opens these tabs, upgrade to full mode once.
+        if ((tab === 'describe' || tab === 'events') && selectedNodeForDetails?.name) {
+            await ensureNodeDetailsFullModeLoaded(tab);
+        }
+    });
+});
+
+async function fetchNodeDetails({ name, mode } = {}) {
+    const params = new URLSearchParams();
+    if (name) params.set('name', name);
+    if (mode) params.set('mode', mode);
+    const resp = await fetch(`${API_URL}/node-details?${params.toString()}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await parseJsonSafely(resp);
+    if (!resp.ok) {
+        const msg = data?.error || data?.message || resp.statusText || 'Failed to fetch node details';
+        throw new Error(msg);
+    }
+    return data;
+}
+
+function applyNodeDetailsToUi({ name, details }) {
+    if (!details) return;
+
+    const describe = details?.describe || '(no describe output)';
+    const nodeJson = details?.nodeJson || details?.node_json || null;
+    const events = details?.events || '(no events output)';
+
+    if (nodeDetailsDescribePre) {
+        nodeDetailsDescribePre.textContent = `# kubectl describe node ${name}\n${describe}`;
+    }
+    if (nodeDetailsJsonPre) {
+        nodeDetailsJsonPre.textContent = `# kubectl get node ${name} -o json\n${prettyJson(nodeJson)}`;
+    }
+    if (nodeDetailsEventsPre) {
+        nodeDetailsEventsPre.textContent = `# kubectl get events --all-namespaces --field-selector involvedObject.kind=Node,involvedObject.name=${name}\n${events}`;
+    }
+}
+
+async function ensureNodeDetailsFullModeLoaded(activeTab) {
+    if (selectedNodeDetailsMode === 'full') return;
+    if (isLoadingNodeDetails) return;
+    const name = selectedNodeForDetails?.name;
+    if (!name) return;
+
+    try {
+        isLoadingNodeDetails = true;
+        if (activeTab === 'describe' && nodeDetailsDescribePre) nodeDetailsDescribePre.textContent = 'Loading full describe...';
+        if (activeTab === 'events' && nodeDetailsEventsPre) nodeDetailsEventsPre.textContent = 'Loading full events...';
+
+        const details = await fetchNodeDetails({ name, mode: 'full' });
+        selectedNodeDetailsPayload = details;
+        selectedNodeDetailsMode = 'full';
+        renderNodeDetailsMeta(selectedNodeForDetails, details);
+        applyNodeDetailsToUi({ name, details });
+    } catch (e) {
+        // Don't spam the user; just show an error in the active panel.
+        if (activeTab === 'describe' && nodeDetailsDescribePre) {
+            nodeDetailsDescribePre.textContent = `Failed to load full describe: ${e?.message || e}`;
+        }
+        if (activeTab === 'events' && nodeDetailsEventsPre) {
+            nodeDetailsEventsPre.textContent = `Failed to load full events: ${e?.message || e}`;
+        }
+    } finally {
+        isLoadingNodeDetails = false;
+    }
+}
+
 scanNodesBtn.addEventListener('click', async () => {
     scanNodesBtn.disabled = true;
     scanNodesBtn.style.opacity = '0.6';
     nodesScanLoading.style.display = 'block';
     nodesScanResults.style.display = 'none';
     nodesList.innerHTML = '';
+    lastScannedNodes = [];
 
     try {
         const nodesResponse = await fetch(`${API_URL}/scan-nodes`, {
@@ -887,6 +1353,7 @@ scanNodesBtn.addEventListener('click', async () => {
         if (nodesResponse.ok) {
             const data = parsedResponse || {};
             if (data.nodes && data.nodes.length > 0) {
+                lastScannedNodes = data.nodes;
                 data.nodes.forEach(node => {
                     const nodeDiv = document.createElement('div');
                     nodeDiv.className = 'node-item';
@@ -918,8 +1385,53 @@ scanNodesBtn.addEventListener('click', async () => {
                                 <span>${node.externalIp}</span>
                             </div>` : ''}
                         </div>
+                        <button class="btn-details" type="button" data-node-name="${escapeHtml(node.name)}">🔎 Details</button>
                     `;
                     nodesList.appendChild(nodeDiv);
+                });
+
+                // Delegate Details button clicks
+                nodesList.querySelectorAll('button.btn-details').forEach(btn => {
+                    btn.addEventListener('click', async (ev) => {
+                        const name = ev.currentTarget?.dataset?.nodeName;
+                        const node = (lastScannedNodes || []).find(n => String(n.name) === String(name)) || { name };
+
+                        selectedNodeForDetails = {
+                            name: node?.name ?? name,
+                            status: node?.status,
+                            roles: node?.roles,
+                            age: node?.age,
+                            version: node?.version,
+                            internalIp: node?.internalIp,
+                            externalIp: node?.externalIp
+                        };
+                        selectedNodeDetailsPayload = null;
+                        selectedNodeDetailsMode = 'fast';
+                        isLoadingNodeDetails = false;
+
+                        if (nodeDetailsTitle) nodeDetailsTitle.textContent = `Node details: ${name}`;
+
+                        renderNodeDetailsMeta(node, null);
+                        setActiveNodeTab('describe');
+                        if (nodeDetailsDescribePre) nodeDetailsDescribePre.textContent = 'Loading details...';
+                        if (nodeDetailsJsonPre) nodeDetailsJsonPre.textContent = '';
+                        if (nodeDetailsEventsPre) nodeDetailsEventsPre.textContent = '';
+
+                        openNodeDetailsModal();
+
+                        try {
+                            const details = await fetchNodeDetails({ name, mode: 'fast' });
+                            selectedNodeDetailsPayload = details;
+                            selectedNodeDetailsMode = details?.mode || 'fast';
+                            renderNodeDetailsMeta(node, details);
+
+                            applyNodeDetailsToUi({ name, details });
+                        } catch (e) {
+                            if (nodeDetailsDescribePre) {
+                                nodeDetailsDescribePre.textContent = `Failed to load node details: ${e?.message || e}`;
+                            }
+                        }
+                    });
                 });
             } else {
                 nodesList.innerHTML = '<p style="text-align: center; opacity: 0.7;">No Kubernetes nodes found on this system.</p>';

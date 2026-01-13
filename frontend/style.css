@@ -906,7 +906,8 @@ html, body {
   padding: 0;
   max-width: 450px;
   width: 90%;
-  z-index: 1000;
+  /* Must be above the overlay (which uses 1190) so clicks target the modal, not the overlay */
+  z-index: 1220;
   box-shadow: 0 20px 60px rgba(16, 11, 0, 0.5),
               inset 0 1px 0 rgba(239, 255, 200, 0.1);
   animation: slideInScale 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -955,10 +956,19 @@ html, body {
   position: fixed;
   inset: 0;
   background-color: rgba(16, 11, 0, 0.7);
-  z-index: 1200;
+  /* Overlay must stay BEHIND the modal card; otherwise the modal looks blurred and can't be clicked */
+  z-index: 1190;
   pointer-events: auto;
-  backdrop-filter: blur(2px);
+  /* Disable blur for maximum cross-browser stability (avoids blurry modal text on some Windows setups) */
+  backdrop-filter: none;
   animation: fadeInOverlay 0.3s ease;
+}
+
+/* Safety: ensure the modal itself is not blurred even when backdrop-filter is active */
+.auth-modal,
+.modal-content {
+  filter: none;
+  backdrop-filter: none;
 }
 
 @keyframes fadeInOverlay {
@@ -1010,6 +1020,137 @@ html, body {
   width: min(92vw, 560px);
   max-height: min(85vh, 720px);
   overflow: auto;
+}
+
+/* Pod details modal: a bit wider so the long title fits better */
+#pod-details-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1220;
+  max-width: none;
+  width: auto;
+  animation: none;
+}
+
+/* Ensure node details modal is also above its overlay */
+#node-details-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1220;
+  max-width: none;
+  width: auto;
+  animation: none;
+}
+
+.pod-details-modal-content {
+  max-width: 760px;
+  width: min(94vw, 760px);
+  max-height: min(86vh, 820px);
+  overflow: auto;
+}
+
+/* Node details modal: same sizing as pod details modal */
+.node-details-modal-content {
+  max-width: 760px;
+  width: min(94vw, 760px);
+  max-height: min(86vh, 820px);
+  overflow: auto;
+  /* Brighter, more readable than the overlay/background */
+  background: rgba(239, 255, 200, 0.22);
+  border: 2px solid rgba(133, 203, 51, 0.85);
+}
+
+/* Improve readability inside node details modal */
+#node-details-modal .modal-header {
+  background: rgba(239, 255, 200, 0.14);
+}
+
+#node-details-modal .pod-details-pre {
+  background: rgba(16, 11, 0, 0.42);
+  color: rgba(239, 255, 200, 0.98);
+}
+
+#node-details-modal .pod-details-badge {
+  background: rgba(239, 255, 200, 0.10);
+  border-color: rgba(133, 203, 51, 0.45);
+}
+
+#pod-details-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Make the primary action in this modal feel like the rest of the UI */
+#pod-details-add-context.btn-primary {
+  /* Make it look like the modal secondary action (Close) */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+  width: auto;
+  min-width: 200px;
+  padding: 0.9rem 1.25rem;
+  border-radius: 12px;
+  border: 2px solid rgba(239, 255, 200, 0.25);
+  background: rgba(239, 255, 200, 0.06);
+  color: var(--frosted-mint);
+  box-shadow: none;
+  font-weight: 600;
+}
+
+#pod-details-add-context.btn-primary:hover {
+  transform: translateY(-1px);
+  background: rgba(239, 255, 200, 0.10);
+  border-color: rgba(239, 255, 200, 0.38);
+}
+
+#pod-details-add-context.btn-primary:active {
+  transform: translateY(0);
+}
+
+#pod-details-add-context.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Tabs */
+.pod-details-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.pod-tab-btn {
+  padding: 0.5rem 0.8rem;
+  border-radius: 999px;
+  border: 2px solid rgba(239, 255, 200, 0.2);
+  background: rgba(239, 255, 200, 0.06);
+  color: var(--frosted-mint);
+  cursor: pointer;
+  font-weight: 600;
+  transition: transform 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.pod-tab-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(133, 203, 51, 0.35);
+  background: rgba(133, 203, 51, 0.10);
+}
+
+.pod-tab-btn.active {
+  border-color: rgba(133, 203, 51, 0.7);
+  background: rgba(133, 203, 51, 0.18);
+  color: var(--frosted-mint);
+}
+
+.pod-tab-panels {
+  margin-top: 0.5rem;
 }
 
 /* Slightly tighter header for action modals */
@@ -1084,6 +1225,59 @@ button:focus-visible {
 .action-icon-btn.delete:hover {
   background-color: rgba(255, 99, 99, 0.18);
   border-color: rgba(255, 99, 99, 0.45);
+}
+
+/* Pods details modal */
+.pod-details-pre {
+  background: rgba(16, 11, 0, 0.35);
+  border: 1px solid rgba(239, 255, 200, 0.2);
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+  color: var(--frosted-mint);
+  font-size: 0.9rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 54vh;
+  overflow: auto;
+}
+
+.pod-details-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(239, 255, 200, 0.12);
+  border: 1px solid rgba(239, 255, 200, 0.22);
+  color: var(--frosted-mint);
+  font-size: 0.85rem;
+}
+
+.pod-details-badge strong {
+  color: var(--yellow-green);
+  font-weight: 700;
+}
+
+.btn-details {
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 10px;
+  border: 2px solid rgba(239, 255, 200, 0.25);
+  background: rgba(239, 255, 200, 0.08);
+  color: var(--frosted-mint);
+  cursor: pointer;
+  transition: transform 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.btn-details:hover {
+  transform: translateY(-1px);
+  background: rgba(133, 203, 51, 0.12);
+  border-color: rgba(133, 203, 51, 0.45);
+}
+
+.btn-details:active {
+  transform: translateY(0);
 }
 
 @keyframes fadeInContent {

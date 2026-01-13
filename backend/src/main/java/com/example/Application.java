@@ -2,8 +2,8 @@ package com.example;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.ComponentScan;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.cors.CorsConfiguration;
@@ -19,6 +19,7 @@ import java.io.InputStreamReader;
 import java.util.Arrays;
 
 @SpringBootApplication
+@ComponentScan(basePackages = {"com.example", "com.example.controllers"})
 public class Application {
 
     public static void main(String[] args) {
@@ -91,9 +92,34 @@ class ApiController {
                     pod.put("name", parts[1]);
                     pod.put("ready", parts.length > 2 ? parts[2] : "N/A");
                     pod.put("status", parts.length > 3 ? parts[3] : "N/A");
-                    pod.put("restarts", parts.length > 4 ? parts[4] : "0");
-                    pod.put("age", parts.length > 5 ? parts[5] : "N/A");
-                    pod.put("node", parts.length > 6 ? parts[6] : "N/A");
+                    // kubectl get pods -o wide columns normally:
+                    // NAMESPACE NAME READY STATUS RESTARTS AGE IP NODE NOMINATED_NODE READINESS_GATES
+                    // But RESTARTS can include the last restart time in parentheses, e.g.:
+                    //   RESTARTS: "3 (19h ago)" => tokens: "3", "(19h", "ago)"
+                    int idx = 4;
+
+                    String restarts = parts.length > idx ? parts[idx] : "0";
+                    idx++;
+                    if (parts.length > idx && parts[idx].startsWith("(")) {
+                        // Skip "(19h" and "ago)" (and any extra tokens until we see a token ending with ')')
+                        while (parts.length > idx && !parts[idx].endsWith(")")) {
+                            idx++;
+                        }
+                        if (parts.length > idx) {
+                            idx++;
+                        }
+                    }
+                    pod.put("restarts", restarts);
+
+                    // AGE token is now at idx
+                    String rawAge = parts.length > idx ? parts[idx] : "N/A";
+                    pod.put("age", rawAge == null ? "N/A" : rawAge.replace("(", "").replace(")", ""));
+                    idx++;
+
+                    // IP then NODE
+                    pod.put("ip", parts.length > idx ? parts[idx] : "N/A");
+                    idx++;
+                    pod.put("node", parts.length > idx ? parts[idx] : "N/A");
                     pod.put("containers", parts.length > 2 ? parts[2].split("/")[1] : "N/A");
                     pods.add(pod);
                 }
@@ -111,6 +137,7 @@ class ApiController {
 
         return result;
     }
+
 
     private boolean isKubectlInstalledQuick() {
         try {

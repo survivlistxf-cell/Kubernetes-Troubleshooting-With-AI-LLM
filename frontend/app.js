@@ -446,6 +446,34 @@ const promptForm = document.getElementById('prompt-form');
 const promptInput = document.getElementById('prompt-input');
 const messagesArea = document.getElementById('messages');
 
+// Show typing indicator
+function showTypingIndicator() {
+    const typingDiv = document.createElement('div');
+    typingDiv.className = 'message assistant typing-indicator';
+    typingDiv.id = 'typing-indicator';
+    
+    const avatarDiv = document.createElement('div');
+    avatarDiv.className = 'message-avatar';
+    avatarDiv.textContent = 'AI';
+    
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+    contentDiv.innerHTML = '<span></span><span></span><span></span>';
+    
+    typingDiv.appendChild(avatarDiv);
+    typingDiv.appendChild(contentDiv);
+    messagesArea.appendChild(typingDiv);
+    messagesArea.scrollTop = messagesArea.scrollHeight;
+}
+
+// Remove typing indicator
+function removeTypingIndicator() {
+    const typingIndicator = document.getElementById('typing-indicator');
+    if (typingIndicator) {
+        typingIndicator.remove();
+    }
+}
+
 // Auto-resize textarea
 promptInput.addEventListener('input', () => {
     promptInput.style.height = 'auto';
@@ -457,29 +485,42 @@ promptForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     
     const message = promptInput.value.trim();
-    if (!message) return;
+    const hasAttachments = attachedFiles.length > 0;
+
+    if (!message && !hasAttachments) {
+        return;
+    }
     
     // Hide welcome header and collapse sidebar on first message
     hideWelcomeHeader();
     autoCollapseSidebar();
     
+    // Build message with attachments context
+    let fullMessage = message;
+    if (hasAttachments) {
+        fullMessage += '\n\n[Attached files]\n';
+        attachedFiles.forEach(file => {
+            fullMessage += `\nFile: ${file.name} (${formatFileSize(file.size)})\n\`\`\`${file.name.split('.').pop()}\n${file.content}\n\`\`\``;
+        });
+    }
+    
     // Add user message to chat
-    addMessage(message, 'user');
+    addMessage(message || `📎 ${attachedFiles.length} file(s) attached`, 'user');
     promptInput.value = '';
     promptInput.style.height = 'auto';
+    attachedFiles = [];
+    updateAttachmentsPreview();
     
     // Show typing indicator
     showTypingIndicator();
     
     try {
-        // Send to backend API
-        const payload = { message };
+        const payload = { message: fullMessage };
         const userId = localStorage.getItem('userId');
         if (userId) {
             payload.userId = userId;
         }
 
-        // Attach active conversation id so the backend can persist and AI can keep context.
         payload.conversationId = getOrCreateConversationId();
 
         const response = await fetch(`${API_URL}/chat`, {
@@ -492,7 +533,6 @@ promptForm.addEventListener('submit', async (e) => {
         
         if (response.ok) {
             const data = await response.json();
-            // Backend returns the conversationId it actually used. Keep it in sync.
             if (data?.conversationId) {
                 localStorage.setItem('conversationId', String(data.conversationId));
             }
@@ -530,45 +570,196 @@ function addMessage(text, sender) {
     
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
-    contentDiv.textContent = text;
-    
-    messageDiv.appendChild(avatarDiv);
-    messageDiv.appendChild(contentDiv);
-    
-    messagesArea.appendChild(messageDiv);
-    
-    // Scroll to bottom
-    messagesArea.scrollTop = messagesArea.scrollHeight;
-}
 
-// Show typing indicator
-function showTypingIndicator() {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = 'message assistant typing-indicator';
-    messageDiv.id = 'typing-indicator';
-    
-    const avatarDiv = document.createElement('div');
-    avatarDiv.className = 'message-avatar';
-    avatarDiv.textContent = 'AI';
-    
-    const contentDiv = document.createElement('div');
-    contentDiv.className = 'message-content';
-    contentDiv.innerHTML = '<span></span><span></span><span></span>';
-    
-    messageDiv.appendChild(avatarDiv);
-    messageDiv.appendChild(contentDiv);
-    
-    messagesArea.appendChild(messageDiv);
-    messagesArea.scrollTop = messagesArea.scrollHeight;
-}
-
-// Remove typing indicator
-function removeTypingIndicator() {
-    const indicator = document.getElementById('typing-indicator');
-    if (indicator) {
-        indicator.remove();
+    if (sender === 'assistant') {
+        contentDiv.innerHTML = renderMarkdown(text);
+        attachCopyListeners(contentDiv);
+    } else {
+        contentDiv.textContent = text;
     }
+    
+    messageDiv.appendChild(avatarDiv);
+    messageDiv.appendChild(contentDiv);
+    messagesArea.appendChild(messageDiv);
+    messagesArea.scrollTop = messagesArea.scrollHeight;
 }
+
+function attachCopyListeners(container) {
+    container.querySelectorAll('[data-copy-code]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const code = btn.getAttribute('data-copy-code');
+            navigator.clipboard.writeText(code).then(() => {
+                const label = btn.querySelector('.copy-label');
+                if (label) {
+                    const orig = label.textContent;
+                    label.textContent = 'Copied!';
+                    setTimeout(() => { label.textContent = orig; }, 1800);
+                }
+            }).catch(() => {
+                const ta = document.createElement('textarea');
+                ta.value = code;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            });
+        });
+    });
+}
+
+const COPY_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+
+function makeCmdBlock(code, lang) {
+    const safeCode = escapeHtml(code);
+    const safeAttr = code.replace(/&/g,'&amp;').replace(/"/g, '&quot;');
+    const langLabel = lang || 'bash';
+    return `<div class="cmd-block-wrapper">
+        <div class="cmd-block-header">
+            <span class="cmd-block-lang">${escapeHtml(langLabel)}</span>
+            <button class="cmd-copy-btn" data-copy-code="${safeAttr}" title="Copy code">
+                ${COPY_ICON}<span class="copy-label">Copy code</span>
+            </button>
+        </div>
+        <pre class="cmd-block-code">${safeCode}</pre>
+    </div>`;
+}
+
+function renderMarkdown(text) {
+    if (!text) return '';
+
+    const lines = text.split('\n');
+    let html = '';
+    let inCodeBlock = false;
+    let codeBlockLines = [];
+    let codeBlockLang = '';
+    let inList = false;
+    let listType = '';
+
+    const flushList = () => {
+        if (inList) {
+            html += `</${listType}>`;
+            inList = false;
+            listType = '';
+        }
+    };
+
+    const isCommand = (s) => /^(kubectl|docker|helm|k9s|kubeadm|minikube|kind)\b/.test(s.trim());
+
+    const renderInline = (line) => {
+        // Bold **text**
+        line = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        // Italic *text* (not inside **)
+        line = line.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+        // Inline code `code` - commands get extracted, others get styled
+        line = line.replace(/`([^`]+)`/g, (_, code) => {
+            const trimmed = code.trim();
+            if (isCommand(trimmed)) {
+                // Return a placeholder - will be replaced after list item is closed
+                return `<CMD_PLACEHOLDER data="${trimmed.replace(/"/g,'&quot;')}">`;
+            }
+            return `<code class="inline-code">${escapeHtml(code)}</code>`;
+        });
+        return line;
+    };
+
+    // Post-process: expand CMD_PLACEHOLDER into full cmd blocks
+    const expandPlaceholders = (s) => {
+        return s.replace(/<CMD_PLACEHOLDER data="([^"]*)">/g, (_, code) => {
+            const decoded = code.replace(/&quot;/g, '"');
+            return makeCmdBlock(decoded, 'bash');
+        });
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+
+        // Fenced code block
+        const fenceMatch = raw.match(/^```(\w*)\s*$/);
+        if (fenceMatch && !inCodeBlock) {
+            flushList();
+            inCodeBlock = true;
+            codeBlockLang = fenceMatch[1] || 'bash';
+            codeBlockLines = [];
+            continue;
+        }
+        if (raw.trim() === '```' && inCodeBlock) {
+            const code = codeBlockLines.join('\n');
+            const safeCode = escapeHtml(code);
+            const safeAttr = code.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+            html += `<div class="code-block-wrapper">
+                <div class="code-block-header">
+                    <span class="code-block-lang">${escapeHtml(codeBlockLang)}</span>
+                    <button class="copy-btn" data-copy-code="${safeAttr}" title="Copy code">
+                        ${COPY_ICON}<span class="copy-label">Copy code</span>
+                    </button>
+                </div>
+                <pre class="code-block"><code>${safeCode}</code></pre>
+            </div>`;
+            inCodeBlock = false;
+            codeBlockLines = [];
+            codeBlockLang = '';
+            continue;
+        }
+        if (inCodeBlock) {
+            codeBlockLines.push(raw);
+            continue;
+        }
+
+        // Empty line
+        if (raw.trim() === '') {
+            flushList();
+            html += '<div style="height:0.4rem"></div>';
+            continue;
+        }
+
+        // Headings
+        const h3 = raw.match(/^### (.+)/);
+        const h2 = raw.match(/^## (.+)/);
+        const h1 = raw.match(/^# (.+)/);
+        if (h3) { flushList(); html += `<h4 class="md-h4">${renderInline(h3[1])}</h4>`; continue; }
+        if (h2) { flushList(); html += `<h3 class="md-h3">${renderInline(h2[1])}</h3>`; continue; }
+        if (h1) { flushList(); html += `<h2 class="md-h2">${renderInline(h1[1])}</h2>`; continue; }
+
+        // Numbered list
+        const olMatch = raw.match(/^(\d+)\.\s+(.+)/);
+        if (olMatch) {
+            if (!inList || listType !== 'ol') {
+                flushList();
+                html += '<ol class="md-ol">';
+                inList = true;
+                listType = 'ol';
+            }
+            html += `<li>${expandPlaceholders(renderInline(olMatch[2]))}</li>`;
+            continue;
+        }
+
+        // Bullet list
+        const ulMatch = raw.match(/^[-*]\s+(.+)/);
+        if (ulMatch) {
+            if (!inList || listType !== 'ul') {
+                flushList();
+                html += '<ul class="md-ul">';
+                inList = true;
+                listType = 'ul';
+            }
+            html += `<li>${expandPlaceholders(renderInline(ulMatch[1]))}</li>`;
+            continue;
+        }
+
+        // Normal paragraph
+        flushList();
+        html += `<p class="md-p">${expandPlaceholders(renderInline(raw))}</p>`;
+    }
+
+    if (inCodeBlock && codeBlockLines.length > 0) {
+        html += makeCmdBlock(codeBlockLines.join('\n'), codeBlockLang);
+    }
+    flushList();
+
+    return expandPlaceholders(html);
+}
+
+// ==================== PODS SCANNER ====================
 
 // Pods Scanner Functionality
 const scanBtn = document.getElementById('scan-btn');
@@ -827,8 +1018,6 @@ function buildSinglePodContextPayload(pod, detailsPayload) {
     const userId = localStorage.getItem('userId');
     const nowIso = new Date().toISOString();
 
-    // Namespace/name can live in multiple places depending on how details are shaped (raw kubectl json, wrapped payload,
-    // or just the selected pod object). Make this resilient so we don't end up with default/unknown.
     const detailsNs = detailsPayload?.namespace
         || detailsPayload?.podJson?.metadata?.namespace
         || detailsPayload?.pod_json?.metadata?.namespace
@@ -844,7 +1033,6 @@ function buildSinglePodContextPayload(pod, detailsPayload) {
     const ns = (pod?.namespace ?? detailsNs ?? '').toString().trim() || 'default';
     const name = (pod?.name ?? detailsName ?? '').toString().trim() || 'unknown-pod';
 
-    // Keep a normalized view of the details payload too (helps downstream and makes debugging easier).
     const normalizedDetails = detailsPayload
         ? {
             ...detailsPayload,
@@ -917,6 +1105,9 @@ async function sendPodsContextToServer(payload) {
 }
 
 scanBtn.addEventListener('click', async () => {
+    const namespaceInput = document.getElementById('namespace-input');
+    const namespace = (namespaceInput?.value || 'default').trim() || 'default';
+
     scanBtn.disabled = true;
     scanBtn.style.opacity = '0.6';
     scanLoading.style.display = 'block';
@@ -930,7 +1121,7 @@ scanBtn.addEventListener('click', async () => {
     }
 
     try {
-        const response = await fetch(`${API_URL}/scan-pods`, {
+        const response = await fetch(`${API_URL}/scan-pods?namespace=${encodeURIComponent(namespace)}`, {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json',
@@ -1079,92 +1270,78 @@ scanBtn.addEventListener('click', async () => {
 podDetailsAddContextBtn?.addEventListener('click', async () => {
     if (!selectedPodForDetails) return;
 
-    podDetailsAddContextBtn.disabled = true;
-    podDetailsAddContextBtn.style.opacity = '0.6';
+    const pod = selectedPodForDetails;
+    const details = selectedPodDetailsPayload;
+    const ns = pod?.namespace || details?.namespace || 'default';
+    const name = pod?.name || details?.name || 'unknown-pod';
 
-    try {
-        const payload = buildSinglePodContextPayload(selectedPodForDetails, selectedPodDetailsPayload);
-        // Debug (kept intentionally small): helps trace why ns/name might fall back.
-        console.log('[pods] add-context payload', {
-            selectedPodForDetails,
-            detailsKeys: selectedPodDetailsPayload ? Object.keys(selectedPodDetailsPayload) : null,
-            messageText: payload?.message?.text,
-            target: payload?.context?.targets?.[0]
-        });
-        await sendPodsContextToServer(payload);
+    // Build a readable text summary for the attachment
+    let contextContent = `=== POD DETAILS: ${ns}/${name} ===\n`;
+    contextContent += `Namespace: ${ns}\n`;
+    contextContent += `Name: ${name}\n`;
+    contextContent += `Status: ${pod?.status || 'N/A'}\n`;
+    contextContent += `Node: ${pod?.node || 'N/A'}\n`;
+    contextContent += `Ready: ${pod?.ready || 'N/A'}\n`;
+    contextContent += `Restarts: ${pod?.restarts ?? 'N/A'}\n`;
+    contextContent += `Age: ${pod?.age || 'N/A'}\n`;
+    contextContent += `Containers: ${pod?.containers || 'N/A'}\n`;
 
-        closePodDetailsModal();
-
-        // Switch to chat Home and show feedback
-        hideWelcomeHeader();
-        autoCollapseSidebar();
-        switchToTab('home');
-        // Display exactly what we sent in payload.message.text (avoids drift between UI and payload).
-        const displayText = payload?.message?.text ? `✅ ${payload.message.text}` : '✅ Pod context added';
-        addMessage(displayText, 'user');
-    } catch (e) {
-        console.error('[pods] Failed to add pod context', e);
-        hideWelcomeHeader();
-        autoCollapseSidebar();
-        switchToTab('home');
-        const ns = selectedPodForDetails?.namespace || selectedPodDetailsPayload?.namespace || 'default';
-        const name = selectedPodForDetails?.name || selectedPodDetailsPayload?.name || 'unknown-pod';
-        addMessage(`❌ Pod context NOT added (${ns}/${name}): ${e?.message || 'unknown error'}`, 'user');
-    } finally {
-        podDetailsAddContextBtn.disabled = false;
-        podDetailsAddContextBtn.style.opacity = '1';
+    if (details) {
+        if (details.describe) {
+            contextContent += `\n--- kubectl describe ---\n${details.describe}\n`;
+        }
+        const podJson = details?.podJson || details?.pod_json || null;
+        if (podJson) {
+            contextContent += `\n--- kubectl get pod -o json ---\n${prettyJson(podJson)}\n`;
+        }
+        if (details.events) {
+            contextContent += `\n--- Events ---\n${details.events}\n`;
+        }
+        if (details.logs) {
+            contextContent += `\n--- Logs (tail 200) ---\n${details.logs}\n`;
+        }
     }
+
+    attachedFiles.push({
+        name: `pod-${name}.txt`,
+        size: contextContent.length,
+        type: 'text/plain',
+        content: contextContent,
+        _scanContext: true
+    });
+
+    closePodDetailsModal();
+    updateAttachmentsPreview();
+    switchToTab('home');
 });
 
 podsAddToChatBtn?.addEventListener('click', async () => {
     if (!podsAddToChatBtn) return;
+    if (!Array.isArray(lastScannedPods) || lastScannedPods.length === 0) return;
 
-    console.log('[pods] Add context clicked', {
-        hasPods: Array.isArray(lastScannedPods) && lastScannedPods.length > 0,
-        podsCount: Array.isArray(lastScannedPods) ? lastScannedPods.length : 0
+    // Build a readable summary as an attached file (same format as attach-scan-option)
+    let contextContent = `=== PODS SCAN (${lastScannedPods.length} pods) ===\n`;
+    lastScannedPods.forEach(p => {
+        contextContent += `\nPod: ${p.name}\n`;
+        contextContent += `  Namespace: ${p.namespace || 'default'}\n`;
+        contextContent += `  Status: ${p.status || 'N/A'}\n`;
+        contextContent += `  Node: ${p.node || 'N/A'}\n`;
+        contextContent += `  Ready: ${p.ready || 'N/A'}\n`;
+        contextContent += `  Restarts: ${p.restarts ?? 'N/A'}\n`;
+        contextContent += `  Age: ${p.age || 'N/A'}\n`;
+        contextContent += `  Containers: ${p.containers || 'N/A'}\n`;
     });
 
-    podsAddToChatBtn.disabled = true;
-    podsAddToChatBtn.style.opacity = '0.6';
-    try {
-        if (!lastScannedPods) {
-            lastScannedPods = [];
-        }
+    attachedFiles.push({
+        name: `k8s-pods-context.txt`,
+        size: contextContent.length,
+        type: 'text/plain',
+        content: contextContent,
+        _scanContext: true
+    });
 
-        // Level 0 for now; server-side can be extended to fetch events/logs/describe on demand.
-        const payload = buildPodsContextPayload(0, lastScannedPods);
-        console.log('[pods] Sending context payload to server', payload);
-        await sendPodsContextToServer(payload);
-
-        // Switch to the chat (Home) tab and show an action confirmation.
-        hideWelcomeHeader();
-        autoCollapseSidebar();
-        document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-        const homeBtn = document.querySelector('.nav-item[data-tab="home"]');
-        const homeTab = document.getElementById('home');
-        if (homeBtn) homeBtn.classList.add('active');
-        if (homeTab) homeTab.classList.add('active');
-
-        addMessage('✅ Pods context added', 'user');
-    } catch (error) {
-        console.error('[pods] Failed to add context', error);
-
-        // Still switch to chat so user sees feedback.
-        hideWelcomeHeader();
-        autoCollapseSidebar();
-        document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-        const homeBtn = document.querySelector('.nav-item[data-tab="home"]');
-        const homeTab = document.getElementById('home');
-        if (homeBtn) homeBtn.classList.add('active');
-        if (homeTab) homeTab.classList.add('active');
-
-        addMessage(`❌ Pods context NOT added: ${error?.message || 'unknown error'}`, 'user');
-    } finally {
-        podsAddToChatBtn.disabled = false;
-        podsAddToChatBtn.style.opacity = '1';
-    }
+    updateAttachmentsPreview();
+    switchToTab('home');
 });
 
 // Nodes Scanner Functionality
@@ -1225,7 +1402,7 @@ function closeNodeDetailsModal() {
     if (nodeDetailsDescribePre) nodeDetailsDescribePre.textContent = '';
     if (nodeDetailsJsonPre) nodeDetailsJsonPre.textContent = '';
     if (nodeDetailsEventsPre) nodeDetailsEventsPre.textContent = '';
-    if (nodeDetailsMeta) nodeDetailsMeta.innerHTML = '';
+
     setActiveNodeTab('describe');
 }
 
@@ -1598,5 +1775,526 @@ function updateUIAfterLogin(username) {
     document.getElementById('user-info').style.display = 'block';
     document.getElementById('user-info').textContent = `👤 ${username}`;
 }
+
+// ==================== ATTACHMENT SYSTEM ====================
+
+const attachBtn = document.getElementById('attach-btn');
+const attachDropdown = document.getElementById('attach-dropdown');
+const attachFileOption = document.getElementById('attach-file-option');
+const attachScanOption = document.getElementById('attach-scan-option');
+const fileInput = document.getElementById('file-input');
+const attachmentsPreview = document.getElementById('attachments-preview');
+let attachedFiles = [];
+
+// Toggle dropdown
+function toggleAttachDropdown(forceClose) {
+    if (!attachDropdown) return;
+    const isOpen = attachDropdown.style.display !== 'none';
+    if (forceClose || isOpen) {
+        attachDropdown.style.display = 'none';
+        attachBtn?.classList.remove('open');
+    } else {
+        // Update scan option availability
+        const hasScanData = (Array.isArray(lastScannedPods) && lastScannedPods.length > 0)
+            || (Array.isArray(lastScannedNodes) && lastScannedNodes.length > 0);
+        if (attachScanOption) {
+            attachScanOption.disabled = !hasScanData;
+            const desc = attachScanOption.querySelector('.attach-dropdown-desc');
+            if (desc) {
+                desc.textContent = hasScanData
+                    ? `${lastScannedPods?.length || 0} pods, ${lastScannedNodes?.length || 0} nodes available`
+                    : 'Scan pods or nodes first';
+            }
+        }
+        attachDropdown.style.display = 'block';
+        attachBtn?.classList.add('open');
+    }
+}
+
+attachBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleAttachDropdown();
+});
+
+// Close dropdown on outside click
+document.addEventListener('click', (e) => {
+    if (!attachDropdown || attachDropdown.style.display === 'none') return;
+    const wrapper = e.target.closest('.attach-dropdown-wrapper');
+    if (!wrapper) {
+        toggleAttachDropdown(true);
+    }
+});
+
+// Option 1: Attach file from computer
+attachFileOption?.addEventListener('click', () => {
+    toggleAttachDropdown(true);
+    fileInput.click();
+});
+
+// Option 2: Attach scanned context (pods + nodes)
+attachScanOption?.addEventListener('click', () => {
+    toggleAttachDropdown(true);
+
+    const hasPods = Array.isArray(lastScannedPods) && lastScannedPods.length > 0;
+    const hasNodes = Array.isArray(lastScannedNodes) && lastScannedNodes.length > 0;
+
+    if (!hasPods && !hasNodes) return;
+
+    // Build a readable summary as an "attached file"
+    let contextContent = '';
+
+    if (hasPods) {
+        contextContent += `=== PODS SCAN (${lastScannedPods.length} pods) ===\n`;
+        lastScannedPods.forEach(p => {
+            contextContent += `\nPod: ${p.name}\n`;
+            contextContent += `  Namespace: ${p.namespace || 'default'}\n`;
+            contextContent += `  Status: ${p.status || 'N/A'}\n`;
+            contextContent += `  Node: ${p.node || 'N/A'}\n`;
+            contextContent += `  Ready: ${p.ready || 'N/A'}\n`;
+            contextContent += `  Restarts: ${p.restarts ?? 'N/A'}\n`;
+            contextContent += `  Age: ${p.age || 'N/A'}\n`;
+            contextContent += `  Containers: ${p.containers || 'N/A'}\n`;
+        });
+    }
+
+    if (hasNodes) {
+        if (contextContent) contextContent += '\n';
+        contextContent += `=== NODES SCAN (${lastScannedNodes.length} nodes) ===\n`;
+        lastScannedNodes.forEach(n => {
+            contextContent += `\nNode: ${n.name}\n`;
+            contextContent += `  Status: ${n.status || 'N/A'}\n`;
+            contextContent += `  Roles: ${n.roles || 'N/A'}\n`;
+            contextContent += `  Age: ${n.age || 'N/A'}\n`;
+            contextContent += `  Version: ${n.version || 'N/A'}\n`;
+            contextContent += `  Internal IP: ${n.internalIp || 'N/A'}\n`;
+            contextContent += `  External IP: ${n.externalIp || 'N/A'}\n`;
+        });
+    }
+
+    const parts = [];
+    if (hasPods) parts.push(`${lastScannedPods.length} pods`);
+    if (hasNodes) parts.push(`${lastScannedNodes.length} nodes`);
+    const label = `scan-context (${parts.join(', ')})`;
+
+    attachedFiles.push({
+        name: `k8s-scan-context.txt`,
+        size: contextContent.length,
+        type: 'text/plain',
+        content: contextContent,
+        _scanContext: true
+    });
+
+    updateAttachmentsPreview();
+});
+
+// ==================== RESOURCE PICKER MODAL ====================
+
+const resourcePickerModal = document.getElementById('resource-picker-modal');
+const resourcePickerOverlay = document.getElementById('resource-picker-overlay');
+const resourcePickerClose = document.getElementById('resource-picker-close');
+const resourcePickerCancel = document.getElementById('resource-picker-cancel');
+const resourcePickerAdd = document.getElementById('resource-picker-add');
+const resourcePickerTitle = document.getElementById('resource-picker-title');
+const resourcePickerList = document.getElementById('resource-picker-list');
+const resourcePickerSelectAllCb = document.getElementById('resource-picker-select-all-cb');
+const resourcePickerCount = document.getElementById('resource-picker-count');
+const attachBrowsePodsOption = document.getElementById('attach-browse-pods-option');
+const attachBrowseNodesOption = document.getElementById('attach-browse-nodes-option');
+
+let pickerKind = null;
+let pickerItems = [];
+
+function openResourcePicker(kind) {
+    pickerKind = kind;
+    const isPods = kind === 'pods';
+    const data = isPods ? lastScannedPods : lastScannedNodes;
+
+    if (!Array.isArray(data) || data.length === 0) {
+        alert(isPods ? 'No pods scanned yet. Go to Pods Scanner first.' : 'No nodes scanned yet. Go to Nodes Scanner first.');
+        return;
+    }
+
+    pickerItems = data.map((item, i) => ({ ...item, _selected: false, _index: i }));
+    if (resourcePickerTitle) resourcePickerTitle.textContent = isPods ? '📦 Select Pods' : '🖥️ Select Nodes';
+    if (resourcePickerSelectAllCb) resourcePickerSelectAllCb.checked = false;
+    renderPickerList();
+    updatePickerCount();
+
+    if (resourcePickerModal) resourcePickerModal.style.display = 'flex';
+    if (resourcePickerOverlay) resourcePickerOverlay.style.display = 'block';
+}
+
+function closeResourcePicker() {
+    if (resourcePickerModal) resourcePickerModal.style.display = 'none';
+    if (resourcePickerOverlay) resourcePickerOverlay.style.display = 'none';
+    pickerKind = null;
+    pickerItems = [];
+}
+
+resourcePickerClose?.addEventListener('click', closeResourcePicker);
+resourcePickerCancel?.addEventListener('click', closeResourcePicker);
+resourcePickerOverlay?.addEventListener('click', closeResourcePicker);
+
+document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    if (resourcePickerModal?.style?.display && resourcePickerModal.style.display !== 'none') closeResourcePicker();
+});
+
+function updatePickerCount() {
+    const count = pickerItems.filter(i => i._selected).length;
+    if (resourcePickerCount) resourcePickerCount.textContent = `${count} selected`;
+    if (resourcePickerAdd) resourcePickerAdd.disabled = count === 0;
+}
+
+function renderPickerList() {
+    if (!resourcePickerList) return;
+    const isPods = pickerKind === 'pods';
+
+    if (pickerItems.length === 0) {
+        resourcePickerList.innerHTML = `<div class="resource-picker-empty">No ${isPods ? 'pods' : 'nodes'} available.</div>`;
+        return;
+    }
+
+    resourcePickerList.innerHTML = pickerItems.map((item, idx) => {
+        const name = escapeHtml(item.name || 'unknown');
+        let badges = '';
+        if (isPods) {
+            badges = `<span class="resource-picker-item-badge">${escapeHtml(item.namespace || 'default')}</span>
+                <span class="resource-picker-item-badge">${escapeHtml(item.status || 'N/A')}</span>
+                ${item.node ? `<span class="resource-picker-item-badge">${escapeHtml(item.node)}</span>` : ''}`;
+        } else {
+            badges = `<span class="resource-picker-item-badge">${escapeHtml(item.status || 'N/A')}</span>
+                ${item.roles ? `<span class="resource-picker-item-badge">${escapeHtml(item.roles)}</span>` : ''}
+                ${item.version ? `<span class="resource-picker-item-badge">${escapeHtml(item.version)}</span>` : ''}`;
+        }
+        return `<div class="resource-picker-item ${item._selected ? 'selected' : ''}" data-picker-idx="${idx}">
+            <input type="checkbox" ${item._selected ? 'checked' : ''} />
+            <div class="resource-picker-item-info">
+                <div class="resource-picker-item-name">${isPods ? '📦' : '🖥️'} ${name}</div>
+                <div class="resource-picker-item-meta">${badges}</div>
+            </div>
+        </div>`;
+    }).join('');
+
+    resourcePickerList.querySelectorAll('.resource-picker-item').forEach(el => {
+        el.addEventListener('click', () => {
+            const idx = parseInt(el.dataset.pickerIdx);
+            if (isNaN(idx) || !pickerItems[idx]) return;
+            pickerItems[idx]._selected = !pickerItems[idx]._selected;
+            el.classList.toggle('selected', pickerItems[idx]._selected);
+            const cb = el.querySelector('input[type="checkbox"]');
+            if (cb) cb.checked = pickerItems[idx]._selected;
+            if (resourcePickerSelectAllCb) resourcePickerSelectAllCb.checked = pickerItems.every(i => i._selected);
+            updatePickerCount();
+        });
+    });
+}
+
+resourcePickerSelectAllCb?.addEventListener('change', () => {
+    const checked = resourcePickerSelectAllCb.checked;
+    pickerItems.forEach(i => i._selected = checked);
+    renderPickerList();
+    updatePickerCount();
+});
+
+resourcePickerAdd?.addEventListener('click', () => {
+    const selected = pickerItems.filter(i => i._selected);
+    if (selected.length === 0) return;
+    const isPods = pickerKind === 'pods';
+    let contextContent = '';
+
+    if (isPods) {
+        contextContent += `=== SELECTED PODS (${selected.length}) ===\n`;
+        selected.forEach(p => {
+            contextContent += `\nPod: ${p.name}\n  Namespace: ${p.namespace || 'default'}\n  Status: ${p.status || 'N/A'}\n  Node: ${p.node || 'N/A'}\n  Ready: ${p.ready || 'N/A'}\n  Restarts: ${p.restarts ?? 'N/A'}\n  Age: ${p.age || 'N/A'}\n  Containers: ${p.containers || 'N/A'}\n`;
+        });
+    } else {
+        contextContent += `=== SELECTED NODES (${selected.length}) ===\n`;
+        selected.forEach(n => {
+            contextContent += `\nNode: ${n.name}\n  Status: ${n.status || 'N/A'}\n  Roles: ${n.roles || 'N/A'}\n  Age: ${n.age || 'N/A'}\n  Version: ${n.version || 'N/A'}\n  Internal IP: ${n.internalIp || 'N/A'}\n  External IP: ${n.externalIp || 'N/A'}\n`;
+        });
+    }
+
+    attachedFiles.push({
+        name: `${isPods ? 'pods' : 'nodes'}-selection (${selected.length}).txt`,
+        size: contextContent.length,
+        type: 'text/plain',
+        content: contextContent,
+        _scanContext: true
+    });
+
+    updateAttachmentsPreview();
+    closeResourcePicker();
+});
+
+attachBrowsePodsOption?.addEventListener('click', () => {
+    toggleAttachDropdown(true);
+    openResourcePicker('pods');
+});
+
+attachBrowseNodesOption?.addEventListener('click', () => {
+    toggleAttachDropdown(true);
+    openResourcePicker('nodes');
+});
+
+// Patch toggleAttachDropdown to also update browse options
+const _origToggleAttach = toggleAttachDropdown;
+toggleAttachDropdown = function(forceClose) {
+    _origToggleAttach(forceClose);
+    if (!forceClose && attachDropdown?.style.display !== 'none') {
+        const hasPods = Array.isArray(lastScannedPods) && lastScannedPods.length > 0;
+        const hasNodes = Array.isArray(lastScannedNodes) && lastScannedNodes.length > 0;
+        if (attachBrowsePodsOption) {
+            attachBrowsePodsOption.disabled = !hasPods;
+            const desc = attachBrowsePodsOption.querySelector('.attach-dropdown-desc');
+            if (desc) desc.textContent = hasPods ? `${lastScannedPods.length} pods available` : 'Scan pods first';
+        }
+        if (attachBrowseNodesOption) {
+            attachBrowseNodesOption.disabled = !hasNodes;
+            const desc = attachBrowseNodesOption.querySelector('.attach-dropdown-desc');
+            if (desc) desc.textContent = hasNodes ? `${lastScannedNodes.length} nodes available` : 'Scan nodes first';
+        }
+    }
+};
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+}
+
+function getFileIcon(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const icons = {
+        log: '📋', txt: '📄', yaml: '⚙️', yml: '⚙️', json: '{ }',
+        md: '📝', sh: '🔧', py: '🐍', js: '📜', java: '☕',
+        go: '🐹', rs: '🦀', cpp: '⚡', c: '©️', h: '📍',
+        ts: '📘', tsx: '⚛️', jsx: '⚛️'
+    };
+    return icons[ext] || '📎';
+}
+
+function updateAttachmentsPreview() {
+    attachmentsPreview.innerHTML = '';
+    
+    attachedFiles.forEach((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'attachment-item';
+        const icon = file._scanContext ? '🔍' : getFileIcon(file.name);
+        item.innerHTML = `
+            <span class="file-icon">${icon}</span>
+            <span class="file-name" title="${file.name}">${file.name}</span>
+            <span class="file-size">${formatFileSize(file.size)}</span>
+            <button type="button" class="remove-attachment" data-index="${index}" title="Remove file">✕</button>
+        `;
+        attachmentsPreview.appendChild(item);
+    });
+
+    attachmentsPreview.querySelectorAll('.remove-attachment').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const index = parseInt(btn.dataset.index);
+            attachedFiles.splice(index, 1);
+            updateAttachmentsPreview();
+        });
+    });
+}
+
+fileInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    
+    for (const file of files) {
+        if (file.size > 5 * 1024 * 1024) {
+            alert(`File ${file.name} is too large (max 5MB)`);
+            continue;
+        }
+
+        try {
+            const content = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (event) => resolve(event.target.result);
+                reader.onerror = reject;
+                reader.readAsText(file);
+            });
+
+            attachedFiles.push({
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                content: content
+            });
+        } catch (error) {
+            console.error(`Failed to read file ${file.name}:`, error);
+            alert(`Failed to read file ${file.name}`);
+        }
+    }
+
+    updateAttachmentsPreview();
+    fileInput.value = '';
+});
+
+// ==================== PODS SCANNER STYLING ====================
+
+const styleSheet = document.createElement('style');
+styleSheet.textContent = `
+.pod-item, .node-item {
+    border: 2px solid var(--ash-grey);
+    border-radius: 12px;
+    padding: 16px;
+    margin: 12px 0;
+    background: rgba(255,255,255,0.08);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.pod-item:hover, .node-item:hover {
+    border-color: var(--yellow-green);
+    background: rgba(255,255,255,0.12);
+    box-shadow: 0 4px 16px rgba(133, 203, 51, 0.15);
+}
+
+.pod-item h4, .node-item h4 {
+    color: var(--yellow-green);
+    margin: 0 0 12px 0;
+    font-size: 1.1rem;
+}
+
+.pod-info, .node-info {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.pod-info-item, .node-info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    background: var(--frosted-mint);
+    border-radius: 8px;
+    border-left: 3px solid var(--yellow-green);
+}
+
+.pod-info-label, .node-info-label {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--pitch-black);
+    text-transform: uppercase;
+    opacity: 0.7;
+    letter-spacing: 0.3px;
+}
+
+.pod-item span, .node-item span {
+    color: var(--pitch-black);
+}
+
+.btn-scan {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.9rem 1.5rem;
+    background: linear-gradient(135deg, var(--yellow-green) 0%, #9de64f 100%);
+    color: var(--pitch-black);
+    border: 2px solid var(--yellow-green);
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 1rem;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    letter-spacing: 0.3px;
+}
+
+.btn-scan:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(133, 203, 51, 0.4);
+}
+
+.btn-scan:active {
+    transform: translateY(-1px);
+}
+
+.btn-scan:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.scan-loading {
+    text-align: center;
+    padding: 2rem;
+    color: var(--frosted-mint);
+    font-size: 1.1rem;
+}
+
+.scan-results {
+    margin-top: 1.5rem;
+}
+
+.scan-results h3 {
+    color: var(--yellow-green);
+    font-size: 1.3rem;
+    margin-bottom: 1rem;
+    border-bottom: 2px solid var(--yellow-green);
+    padding-bottom: 0.5rem;
+}
+
+.pods-list, .nodes-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.chat-history {
+    padding: 2rem;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.chat-history h2 {
+    color: var(--yellow-green);
+    font-size: 1.8rem;
+    margin-bottom: 1.5rem;
+}
+
+.settings-panel {
+    padding: 2rem;
+}
+
+.settings-panel h2 {
+    color: var(--yellow-green);
+    margin-bottom: 1.5rem;
+}
+
+.settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.settings-group label {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: var(--frosted-mint);
+    cursor: pointer;
+    padding: 0.75rem;
+    border-radius: 8px;
+    transition: all 0.3s;
+}
+
+.settings-group label:hover {
+    background: rgba(133, 203, 51, 0.1);
+}
+
+.settings-group input[type="checkbox"] {
+    cursor: pointer;
+    width: 20px;
+    height: 20px;
+    accent-color: var(--yellow-green);
+}
+`;
+document.head.appendChild(styleSheet);
 
 console.log('Kubexplain Chat App Loaded! 🚀');

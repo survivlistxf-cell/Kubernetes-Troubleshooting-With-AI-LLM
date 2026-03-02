@@ -8,7 +8,7 @@ import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 
-import com.kdiag.server.docs.KubernetesDebugDocs;
+import com.kdiag.server.docs.KubernetesDocsScraper;
 import com.kdiag.server.ollama.OllamaClient;
 import com.kdiag.server.protocol.KdiagModels.Artifact;
 
@@ -22,92 +22,161 @@ import com.kdiag.server.protocol.KdiagModels.Artifact;
 public class AiEngine {
 
     private final OllamaClient ollama;
-    private final KubernetesDebugDocs docs;
+    private final KubernetesDocsScraper docsScraper;
 
-    public AiEngine(OllamaClient ollama, KubernetesDebugDocs docs) {
+    public AiEngine(OllamaClient ollama, KubernetesDocsScraper docsScraper) {
         this.ollama = ollama;
-        this.docs = docs;
+        this.docsScraper = docsScraper;
     }
 
     public AiResult solve(String userText, List<Artifact> artifacts) {
-        String systemPrompt = buildSystemPrompt();
+        // Fetch relevant docs for THIS specific message
+        String relevantDocs = fetchRelevantDocs(userText, artifacts);
+
+        String systemPrompt = buildSystemPrompt(relevantDocs);
         String userPrompt = buildUserPrompt(userText, artifacts);
 
         String llm = null;
         try {
             llm = ollama.chat(systemPrompt, userPrompt);
         } catch (Exception e) {
-            // fall through to minimal fallback
+            System.err.println("[AiEngine] Ollama call failed: " + e.getMessage());
         }
 
         String assistantText = (llm == null || llm.isBlank())
-                ? fallbackAnswer(userText, artifacts)
+                ? fallbackAnswer(userText, artifacts, relevantDocs)
                 : llm.trim();
 
-        // Keep actions_requested as a future enhancement. For now, return none.
         return new AiResult(assistantText, null);
     }
 
-    private String buildSystemPrompt() {
-        return "You are a Kubernetes diagnostics assistant.\n"
-                + "You MUST base your advice on Kubernetes best practices and the official debugging workflow.\n"
-                + "When you suggest commands, prefer kubectl commands and clearly indicate placeholders.\n"
-                + "Be concise, structured, and actionable.\n\n"
-                + docs.getGuidanceSnippet();
+    private String fetchRelevantDocs(String userText, List<Artifact> artifacts) {
+        try {
+            StringBuilder query = new StringBuilder(userText == null ? "" : userText);
+            if (artifacts != null) {
+                for (Artifact a : artifacts) {
+                    if (a != null && a.getType() != null) {
+                        query.append(" ").append(a.getType());
+                    }
+                    if (a != null && a.getContent() != null) {
+                        String snippet = a.getContent().length() > 200
+                                ? a.getContent().substring(0, 200)
+                                : a.getContent();
+                        query.append(" ").append(snippet);
+                    }
+                }
+            }
+            return docsScraper.getRelevantDocs(query.toString());
+        } catch (Exception e) {
+            System.err.println("[AiEngine] Failed to fetch docs (continuing without docs): " + e.getMessage());
+            return "";  // ← Continuă fără docs în loc să arunce eroare
+        }
+    }
+
+    private String buildSystemPrompt(String relevantDocs) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are a Kubernetes diagnostics assistant.\n");
+        sb.append("Answer in Romanian when user writes in Romanian, English when user writes in English.\n");
+        sb.append("Be direct and helpful.\n\n");
+
+        sb.append("IMPORTANT:\n");
+        sb.append("- If user asks to 'stop commands', 'no commands', or 'without commands': analyze only, suggest NO kubectl commands\n");
+        sb.append("- If user provides error messages or logs: explain what they mean\n");
+        sb.append("- Focus on understanding the problem first, not just solutions\n\n");
+
+        if (relevantDocs != null && !relevantDocs.isBlank()) {
+            sb.append("Official Kubernetes docs:\n");
+            sb.append(relevantDocs);
+            sb.append("\n");
+        }
+
+        return sb.toString();
     }
 
     private String buildUserPrompt(String userText, List<Artifact> artifacts) {
         StringBuilder sb = new StringBuilder();
-        sb.append("User question:\n");
         sb.append(userText == null ? "" : userText);
-        sb.append("\n\n");
+        sb.append("\n");
 
         if (artifacts != null && !artifacts.isEmpty()) {
-            sb.append("Diagnostics artifacts (may contain logs/events/describes):\n");
-            int maxArtifacts = Math.min(artifacts.size(), 8);
+            sb.append("\n--- Context from scanner ---\n");
+            int maxArtifacts = Math.min(artifacts.size(), 5);
             for (int i = 0; i < maxArtifacts; i++) {
                 Artifact a = artifacts.get(i);
                 if (a == null) continue;
-                sb.append("--- artifact ").append(i + 1).append(" ---\n");
-                sb.append("type: ").append(nullToEmpty(a.getType())).append("\n");
-                if (a.getTarget() != null) sb.append("target: ").append(a.getTarget()).append("\n");
-                if (a.getContainer() != null) sb.append("container: ").append(a.getContainer()).append("\n");
-                sb.append("content:\n");
-                sb.append(truncate(a.getContent(), 6000));
-                sb.append("\n\n");
+                sb.append("[").append(a.getType()).append("]\n");
+                sb.append(truncate(a.getContent(), 3000)).append("\n\n");
             }
-
-            // light summary to help the model
-            sb.append("Artifact types: ");
-            sb.append(artifacts.stream()
-                    .filter(x -> x != null && x.getType() != null)
-                    .map(Artifact::getType)
-                    .distinct()
-                    .collect(Collectors.joining(", ")));
-            sb.append("\n");
         }
 
-        sb.append("\nReturn a short root-cause hypothesis and a numbered list of next steps.\n");
         return sb.toString();
     }
 
-    private String fallbackAnswer(String userText, List<Artifact> artifacts) {
+    private String fallbackAnswer(String userText, List<Artifact> artifacts, String relevantDocs) {
         String normalized = userText == null ? "" : userText.toLowerCase(Locale.ROOT);
         StringBuilder answer = new StringBuilder();
-        answer.append("I couldn't reach the LLM right now, but I can still suggest standard Kubernetes debugging steps.\n\n");
+        
+        // Check if user is asking to avoid commands
+        boolean avoidCommands = normalized.contains("no command") 
+                              || normalized.contains("stop command") 
+                              || normalized.contains("don't give command")
+                              || normalized.contains("without command")
+                              || normalized.contains("no kubectl");
 
-        if (normalized.contains("crashloop")) {
-            answer.append("Symptom: CrashLoopBackOff\n");
-            answer.append("1) `kubectl describe pod <pod> -n <ns>` (check Events + Last State)\n");
-            answer.append("2) `kubectl logs <pod> -n <ns> --previous --tail=200`\n");
-            answer.append("3) Verify env/config/secret mounts and recent image changes\n");
+        if (avoidCommands) {
+            answer.append("**Diagnosis Analysis** (without commands):\n\n");
+            if (normalized.contains("crashloop")) {
+                answer.append("**Likely Problem: CrashLoopBackOff**\n\n");
+                answer.append("This means your container is crashing repeatedly. Common causes:\n");
+                answer.append("- **Application crash**: Code error, missing dependency, or runtime exception\n");
+                answer.append("- **Bad environment variables**: Wrong config, missing secrets\n");
+                answer.append("- **Incorrect image**: Wrong Docker image or missing entrypoint\n");
+                answer.append("- **Resource limits**: Container running out of memory or disk\n\n");
+                answer.append("To diagnose: Check the last crash logs for error messages.\n");
+            } else if (normalized.contains("pending")) {
+                answer.append("**Likely Problem: Pod Stuck in Pending**\n\n");
+                answer.append("This usually means Kubernetes can't schedule the pod. Reasons:\n");
+                answer.append("- **Insufficient resources**: No nodes have enough CPU/memory\n");
+                answer.append("- **Node affinity/taints**: Pod requirements don't match available nodes\n");
+                answer.append("- **Storage not available**: PVC can't be bound\n");
+                answer.append("- **Image pull error**: Can't download container image\n");
+            } else if (normalized.contains("connection") || normalized.contains("database")) {
+                answer.append("**Likely Problem: Connection Error**\n\n");
+                answer.append("Based on the 'connection' keyword, this could be:\n");
+                answer.append("- **Wrong credentials**: Database password, username, or authentication token changed\n");
+                answer.append("- **Network isolation**: Firewall/network policy blocking access\n");
+                answer.append("- **Service not running**: Database or backend service is down\n");
+                answer.append("- **Wrong hostname/port**: Connection string points to wrong address\n");
+                answer.append("- **SSL/TLS issue**: Certificate validation failing\n");
+            } else {
+                answer.append("**General Diagnosis Approach**\n\n");
+                answer.append("Without seeing logs/evidence, I can't pinpoint the exact issue.\n");
+                answer.append("However, common deployment problems are:\n");
+                answer.append("- **Configuration mismatch**: Env variables, secrets, or connection strings incorrect\n");
+                answer.append("- **Service dependencies**: Required services (DB, cache, API) not running or unreachable\n");
+                answer.append("- **Resource exhaustion**: Application running out of memory, disk, or connections\n");
+                answer.append("- **Image/code issues**: Container crashes on startup or during execution\n");
+                answer.append("- **Network/security**: Firewall, RBAC, or network policies blocking access\n");
+            }
+            answer.append("\n").append(relevantDocs != null ? relevantDocs : "");
         } else {
-            answer.append("1) `kubectl get pods -n <ns>`\n");
-            answer.append("2) `kubectl describe pod <pod> -n <ns>`\n");
-            answer.append("3) `kubectl logs <pod> -n <ns> --tail=200` (and `--previous` if restarting)\n");
+            // Standard fallback with commands
+            answer.append("I couldn't reach the LLM, but here's a diagnostic approach:\n\n");
+            answer.append("**Step 1: Check Pod Status**\n");
+            answer.append("`kubectl get pods -n <ns>` → Look at STATUS and RESTARTS\n\n");
+            
+            answer.append("**Step 2: Inspect Events & Logs**\n");
+            answer.append("`kubectl describe pod <pod> -n <ns>` → Check Events section for clues\n");
+            answer.append("`kubectl logs <pod> -n <ns> --tail=200` → Read container output\n\n");
+            
+            answer.append("**Step 3: Analyze the Evidence**\n");
+            answer.append("Look for keywords in logs: 'connection refused', 'timeout', 'authentication', 'not found'\n\n");
+            
+            if (relevantDocs != null && !relevantDocs.isBlank()) {
+                answer.append(relevantDocs).append("\n");
+            }
         }
-
-        answer.append("\n").append(docs.getGuidanceSnippet());
+        
         return answer.toString().trim();
     }
 
@@ -130,13 +199,8 @@ public class AiEngine {
             this.actions = actions;
         }
 
-        public String getAssistantText() {
-            return assistantText;
-        }
-
-        public List<AiAction> getActions() {
-            return actions;
-        }
+        public String getAssistantText() { return assistantText; }
+        public List<AiAction> getActions() { return actions; }
     }
 
     public static class AiAction {
@@ -156,24 +220,10 @@ public class AiEngine {
             return a;
         }
 
-        public String getId() {
-            return id;
-        }
-
-        public String getType() {
-            return type;
-        }
-
-        public String getCollector() {
-            return collector;
-        }
-
-        public Map<String, Object> getSpec() {
-            return spec;
-        }
-
-        public String getWhy() {
-            return why;
-        }
+        public String getId() { return id; }
+        public String getType() { return type; }
+        public String getCollector() { return collector; }
+        public Map<String, Object> getSpec() { return spec; }
+        public String getWhy() { return why; }
     }
 }

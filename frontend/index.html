@@ -69,6 +69,48 @@
 
                     <div class="input-area">
                         <form id="prompt-form" class="prompt-form">
+                            <div class="attach-dropdown-wrapper">
+                                <button type="button" id="attach-btn" class="btn-attach" title="Attach context">
+                                    <span>＋</span>
+                                </button>
+                                <div id="attach-dropdown" class="attach-dropdown" style="display: none;">
+                                    <button type="button" class="attach-dropdown-item" id="attach-file-option">
+                                        <span class="attach-dropdown-icon">📎</span>
+                                        <div class="attach-dropdown-text">
+                                            <span class="attach-dropdown-label">Attach file</span>
+                                            <span class="attach-dropdown-desc">Upload a file from your computer</span>
+                                        </div>
+                                    </button>
+                                    <button type="button" class="attach-dropdown-item" id="attach-scan-option">
+                                        <span class="attach-dropdown-icon">🔍</span>
+                                        <div class="attach-dropdown-text">
+                                            <span class="attach-dropdown-label">Add scanned context</span>
+                                            <span class="attach-dropdown-desc">Attach pods &amp; nodes scan results</span>
+                                        </div>
+                                    </button>
+                                    <button type="button" class="attach-dropdown-item" id="attach-browse-pods-option">
+                                        <span class="attach-dropdown-icon">📦</span>
+                                        <div class="attach-dropdown-text">
+                                            <span class="attach-dropdown-label">Browse Pods</span>
+                                            <span class="attach-dropdown-desc">Pick specific pods to attach</span>
+                                        </div>
+                                    </button>
+                                    <button type="button" class="attach-dropdown-item" id="attach-browse-nodes-option">
+                                        <span class="attach-dropdown-icon">🖥️</span>
+                                        <div class="attach-dropdown-text">
+                                            <span class="attach-dropdown-label">Browse Nodes</span>
+                                            <span class="attach-dropdown-desc">Pick specific nodes to attach</span>
+                                        </div>
+                                    </button>
+                                </div>
+                            </div>
+                            <input 
+                                type="file" 
+                                id="file-input" 
+                                style="display: none;"
+                                multiple
+                                accept=".log,.txt,.yaml,.yml,.json,.md,.sh,.py,.js,.java,.go,.rs,.cpp,.c,.h,.js,.ts,.tsx,.jsx"
+                            />
                             <textarea 
                                 id="prompt-input" 
                                 class="prompt-input" 
@@ -80,6 +122,7 @@
                                 <span class="icon">➤</span>
                             </button>
                         </form>
+                        <div id="attachments-preview" class="attachments-preview"></div>
                     </div>
                 </div>
             </div>
@@ -100,6 +143,19 @@
                     <h2>📦 Kubernetes Pods Scanner</h2>
                     <p>Scan your system for running Kubernetes pods</p>
                     
+                    <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+                        <label for="namespace-input" style="color: var(--pitch-black); font-weight: 600;">Namespace:</label>
+                        <input 
+                            type="text" 
+                            id="namespace-input" 
+                            placeholder="e.g. default, kube-system" 
+                            value="default"
+                            style="padding: 0.65rem 1rem; border: 2px solid var(--ash-grey); border-radius: 0.5rem; font-size: 0.95rem; background-color: var(--frosted-mint); color: var(--pitch-black); min-width: 200px; transition: border-color 0.2s;"
+                            onfocus="this.style.borderColor='var(--yellow-green)'"
+                            onblur="this.style.borderColor='var(--ash-grey)'"
+                        />
+                    </div>
+
                     <button id="scan-btn" class="btn-scan">🔍 Scan for Pods</button>
                     <button id="pods-add-to-chat-btn" class="btn-scan" style="display: none; margin-left: 0.5rem;">➕ Add pods context to chat</button>
                     
@@ -332,6 +388,31 @@
         </div>
     </div>
     <div id="delete-modal-overlay" class="modal-overlay" style="display: none;" onclick="closeDeleteModal()"></div>
+
+    <!-- Resource Picker Modal -->
+    <div id="resource-picker-overlay" class="modal-overlay" style="display: none;"></div>
+    <div id="resource-picker-modal" class="auth-modal" style="display: none;">
+        <div class="modal-content modal-shell resource-picker-modal-content">
+            <div class="modal-header">
+                <h2 id="resource-picker-title">Select resources</h2>
+                <button class="modal-close" id="resource-picker-close" type="button">✕</button>
+            </div>
+            <div class="auth-form" style="gap: 1rem;">
+                <div class="resource-picker-toolbar">
+                    <label class="resource-picker-select-all">
+                        <input type="checkbox" id="resource-picker-select-all-cb" />
+                        <span>Select all</span>
+                    </label>
+                    <span id="resource-picker-count" class="resource-picker-count">0 selected</span>
+                </div>
+                <div id="resource-picker-list" class="resource-picker-list"></div>
+                <div style="display:flex; justify-content:center; gap:0.75rem;">
+                    <button id="resource-picker-add" type="button" class="btn-primary" disabled>➕ Add selected to chat</button>
+                    <button id="resource-picker-cancel" type="button" class="btn-secondary">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script src="app.js"></script>
 </body>

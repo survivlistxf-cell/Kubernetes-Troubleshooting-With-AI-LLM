@@ -4,6 +4,7 @@ import com.example.entities.ConversationContext;
 import com.example.entities.User;
 import com.example.repositories.ConversationContextRepository;
 import com.example.repositories.UserRepository;
+import com.example.utils.Utils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -40,21 +41,15 @@ public class ContextController {
             String userIdValue = null;
 
             if (request instanceof Map<?, ?> map) {
-                Object conv = map.get("conversation_id");
-                if (conv != null) {
-                    conversationId = String.valueOf(conv);
-                }
-
-                Object src = map.get("source");
-                if (src != null) {
-                    source = String.valueOf(src);
-                }
+                conversationId = Utils.asString(map.get("conversation_id"));
+                source = Utils.asString(map.get("source"));
+                if (source == null)
+                    source = "unknown";
 
                 Object uid = map.get("user_id");
-                if (uid == null) uid = map.get("userId");
-                if (uid != null) {
-                    userIdValue = String.valueOf(uid);
-                }
+                if (uid == null)
+                    uid = map.get("userId");
+                userIdValue = Utils.asString(uid);
 
                 // Try to infer level from first artifact.level
                 Object artifacts = map.get("artifacts");
@@ -76,8 +71,7 @@ public class ContextController {
 
             if (conversationId == null || conversationId.isBlank()) {
                 return ResponseEntity.badRequest().body(Map.of(
-                    "message", "Missing conversation_id"
-                ));
+                        "message", "Missing conversation_id"));
             }
 
             ConversationContext ctx = new ConversationContext();
@@ -98,17 +92,15 @@ public class ContextController {
             ConversationContext saved = conversationContextRepository.save(ctx);
 
             return ResponseEntity.ok(Map.of(
-                "message", "Context received",
-                "contextId", saved.getId(),
-                "conversationId", saved.getConversationId(),
-                "level", saved.getLevel(),
-                "source", saved.getSource()
-            ));
+                    "message", "Context received",
+                    "contextId", saved.getId(),
+                    "conversationId", saved.getConversationId(),
+                    "level", saved.getLevel(),
+                    "source", saved.getSource()));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of(
-                "message", "Failed to ingest context",
-                "error", e.getMessage()
-            ));
+                    "message", "Failed to ingest context",
+                    "error", e.getMessage()));
         }
     }
 }

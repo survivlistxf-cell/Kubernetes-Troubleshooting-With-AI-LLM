@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kubexplain - AI Assistant</title>
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <div class="container">
         <!-- Sidebar -->
@@ -23,7 +25,8 @@
                     <span class="icon">🏠</span>
                     <span class="text">Home</span>
                 </button>
-                <button class="nav-item" id="new-chat-btn" type="button" data-tab="home" title="Start a new conversation">
+                <button class="nav-item" id="new-chat-btn" type="button" data-tab="home"
+                    title="Start a new conversation">
                     <span class="icon">➕</span>
                     <span class="text">New Chat</span>
                 </button>
@@ -47,7 +50,8 @@
             <div class="sidebar-footer">
                 <button id="auth-btn" class="btn-primary" onclick="openLoginModal()">👤 Login</button>
                 <button id="logout-btn" class="btn-secondary" style="display: none;">🚪 Logout</button>
-                <span id="user-info" style="display: none; text-align: center; color: var(--frosted-mint); margin-top: 0.5rem; font-size: 0.9rem;"></span>
+                <span id="user-info"
+                    style="display: none; text-align: center; color: var(--frosted-mint); margin-top: 0.5rem; font-size: 0.9rem;"></span>
             </div>
         </aside>
 
@@ -85,7 +89,8 @@
                                         <span class="attach-dropdown-icon">🔍</span>
                                         <div class="attach-dropdown-text">
                                             <span class="attach-dropdown-label">Add scanned context</span>
-                                            <span class="attach-dropdown-desc">Attach pods &amp; nodes scan results</span>
+                                            <span class="attach-dropdown-desc">Attach pods &amp; nodes scan
+                                                results</span>
                                         </div>
                                     </button>
                                     <button type="button" class="attach-dropdown-item" id="attach-browse-pods-option">
@@ -104,19 +109,11 @@
                                     </button>
                                 </div>
                             </div>
-                            <input 
-                                type="file" 
-                                id="file-input" 
-                                style="display: none;"
-                                multiple
-                                accept=".log,.txt,.yaml,.yml,.json,.md,.sh,.py,.js,.java,.go,.rs,.cpp,.c,.h,.js,.ts,.tsx,.jsx"
-                            />
-                            <textarea 
-                                id="prompt-input" 
-                                class="prompt-input" 
+                            <input type="file" id="file-input" style="display: none;" multiple
+                                accept=".log,.txt,.yaml,.yml,.json,.md,.sh,.py,.js,.java,.go,.rs,.cpp,.c,.h,.js,.ts,.tsx,.jsx" />
+                            <textarea id="prompt-input" class="prompt-input"
                                 placeholder="Ask me anything... (Shift+Enter for new line, Enter to send)"
-                                rows="1"
-                            ></textarea>
+                                rows="1"></textarea>
                             <button type="submit" class="btn-send" title="Send (Enter)">
                                 <span>Send</span>
                                 <span class="icon">➤</span>
@@ -130,7 +127,16 @@
             <!-- Chat History Tab -->
             <div id="chat" class="tab-content">
                 <div class="chat-history">
-                    <h2>💬 Chat History</h2>
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h2>💬 Chat History</h2>
+                        <button id="chat-history-enter-select-mode" class="btn-primary" style="padding:0.4rem 0.8rem; font-size:0.85rem; display:none;">Select</button>
+                    </div>
+                    <div id="chat-history-toolbar" style="display:none; justify-content:space-between; align-items:center; margin-top: 1rem; background: rgba(0,0,0,0.2); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+                        <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; color:var(--frosted-mint); font-size: 0.9rem;">
+                            <input type="checkbox" id="chat-history-select-all" style="width: 1rem; height: 1rem;" /> Select all
+                        </label>
+                        <button type="button" id="chat-history-delete-selected" class="btn-danger" style="padding:0.4rem 0.8rem; font-size:0.85rem;" disabled>Delete selected (0)</button>
+                    </div>
                     <div id="chat-history-content" style="margin-top: 1rem;">
                         <p style="text-align: center; opacity: 0.7; margin-top: 2rem;">No conversations yet</p>
                     </div>
@@ -142,30 +148,28 @@
                 <div class="pods-scanner">
                     <h2>📦 Kubernetes Pods Scanner</h2>
                     <p>Scan your system for running Kubernetes pods</p>
-                    
-                    <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
-                        <label for="namespace-input" style="color: var(--pitch-black); font-weight: 600;">Namespace:</label>
-                        <input 
-                            type="text" 
-                            id="namespace-input" 
-                            placeholder="e.g. default, kube-system" 
-                            value="default"
+
+                    <div
+                        style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+                        <label for="namespace-input"
+                            style="color: var(--pitch-black); font-weight: 600;">Namespace:</label>
+                        <input type="text" id="namespace-input" placeholder="e.g. default, kube-system" value="default"
                             style="padding: 0.65rem 1rem; border: 2px solid var(--ash-grey); border-radius: 0.5rem; font-size: 0.95rem; background-color: var(--frosted-mint); color: var(--pitch-black); min-width: 200px; transition: border-color 0.2s;"
                             onfocus="this.style.borderColor='var(--yellow-green)'"
-                            onblur="this.style.borderColor='var(--ash-grey)'"
-                        />
+                            onblur="this.style.borderColor='var(--ash-grey)'" />
                     </div>
 
                     <button id="scan-btn" class="btn-scan">🔍 Scan for Pods</button>
-                    <button id="pods-add-to-chat-btn" class="btn-scan" style="display: none; margin-left: 0.5rem;">➕ Add pods context to chat</button>
-                    
+                    <button id="pods-add-to-chat-btn" class="btn-scan" style="display: none; margin-left: 0.5rem;">➕ Add
+                        pods context to chat</button>
+
                     <div id="scan-results" class="scan-results" style="display: none;">
                         <h3>Scan Results:</h3>
                         <div id="pods-list" class="pods-list">
                             <!-- Pods will appear here -->
                         </div>
                     </div>
-                    
+
                     <div id="scan-loading" class="scan-loading" style="display: none;">
                         <p>Scanning system...</p>
                     </div>
@@ -177,16 +181,16 @@
                 <div class="nodes-scanner">
                     <h2>🖥️ Kubernetes Nodes Scanner</h2>
                     <p>View all nodes in your Kubernetes cluster</p>
-                    
+
                     <button id="scan-nodes-btn" class="btn-scan">🔍 Scan for Nodes</button>
-                    
+
                     <div id="nodes-scan-results" class="scan-results" style="display: none;">
                         <h3>Scan Results:</h3>
                         <div id="nodes-list" class="nodes-list">
                             <!-- Nodes will appear here -->
                         </div>
                     </div>
-                    
+
                     <div id="nodes-scan-loading" class="scan-loading" style="display: none;">
                         <p>Scanning cluster...</p>
                     </div>
@@ -225,10 +229,14 @@
                 <div id="pod-details-meta" style="display:flex; flex-wrap:wrap; gap:0.5rem;"></div>
 
                 <div class="pod-details-tabs" role="tablist" aria-label="Pod details">
-                    <button type="button" class="pod-tab-btn active" data-tab="describe" role="tab" aria-selected="true">Describe</button>
-                    <button type="button" class="pod-tab-btn" data-tab="json" role="tab" aria-selected="false">JSON</button>
-                    <button type="button" class="pod-tab-btn" data-tab="events" role="tab" aria-selected="false">Events</button>
-                    <button type="button" class="pod-tab-btn" data-tab="logs" role="tab" aria-selected="false">Logs</button>
+                    <button type="button" class="pod-tab-btn active" data-tab="describe" role="tab"
+                        aria-selected="true">Describe</button>
+                    <button type="button" class="pod-tab-btn" data-tab="json" role="tab"
+                        aria-selected="false">JSON</button>
+                    <button type="button" class="pod-tab-btn" data-tab="events" role="tab"
+                        aria-selected="false">Events</button>
+                    <button type="button" class="pod-tab-btn" data-tab="logs" role="tab"
+                        aria-selected="false">Logs</button>
                 </div>
 
                 <div class="pod-tab-panels">
@@ -247,7 +255,8 @@
                 </div>
 
                 <div style="display:flex; justify-content:center; gap:0.75rem;">
-                    <button id="pod-details-add-context" type="button" class="btn-primary">➕ Add context to chat</button>
+                    <button id="pod-details-add-context" type="button" class="btn-primary">➕ Add context to
+                        chat</button>
                     <button id="pod-details-cancel" type="button" class="btn-secondary">Close</button>
                 </div>
             </div>
@@ -266,9 +275,12 @@
                 <div id="node-details-meta" style="display:flex; flex-wrap:wrap; gap:0.5rem;"></div>
 
                 <div class="pod-details-tabs" role="tablist" aria-label="Node details">
-                    <button type="button" class="pod-tab-btn active" data-tab="describe" role="tab" aria-selected="true">Describe</button>
-                    <button type="button" class="pod-tab-btn" data-tab="json" role="tab" aria-selected="false">JSON</button>
-                    <button type="button" class="pod-tab-btn" data-tab="events" role="tab" aria-selected="false">Events</button>
+                    <button type="button" class="pod-tab-btn active" data-tab="describe" role="tab"
+                        aria-selected="true">Describe</button>
+                    <button type="button" class="pod-tab-btn" data-tab="json" role="tab"
+                        aria-selected="false">JSON</button>
+                    <button type="button" class="pod-tab-btn" data-tab="events" role="tab"
+                        aria-selected="false">Events</button>
                 </div>
 
                 <div class="pod-tab-panels">
@@ -308,7 +320,7 @@
                     <input type="password" id="login-password" required placeholder="••••••••">
                 </div>
                 <button type="submit" class="btn-primary">Login</button>
-                <p class="form-footer">Don't have an account? 
+                <p class="form-footer">Don't have an account?
                     <a href="#" onclick="switchToRegister(event)">Register here</a>
                 </p>
             </form>
@@ -338,7 +350,7 @@
                     <input type="password" id="register-confirm" required placeholder="••••••••">
                 </div>
                 <button type="submit" class="btn-primary">Register</button>
-                <p class="form-footer">Already have an account? 
+                <p class="form-footer">Already have an account?
                     <a href="#" onclick="switchToLogin(event)">Login here</a>
                 </p>
             </form>
@@ -358,7 +370,8 @@
             <form id="title-modal-form" class="auth-form">
                 <div class="form-group">
                     <label for="title-modal-input">Conversation title</label>
-                    <input type="text" id="title-modal-input" required maxlength="255" placeholder="e.g. Debugging pods" />
+                    <input type="text" id="title-modal-input" required maxlength="255"
+                        placeholder="e.g. Debugging pods" />
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn-secondary" id="title-modal-cancel">Cancel</button>
@@ -407,13 +420,31 @@
                 </div>
                 <div id="resource-picker-list" class="resource-picker-list"></div>
                 <div style="display:flex; justify-content:center; gap:0.75rem;">
-                    <button id="resource-picker-add" type="button" class="btn-primary" disabled>➕ Add selected to chat</button>
+                    <button id="resource-picker-add" type="button" class="btn-primary" disabled>➕ Add selected to
+                        chat</button>
                     <button id="resource-picker-cancel" type="button" class="btn-secondary">Cancel</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <script type="module" src="js/main.js"></script>
+
+    <!-- Attachment Preview Modal -->
+    <div id="attachment-preview-modal" class="attachment-preview-modal hidden" aria-hidden="true">
+        <div class="attachment-preview-backdrop" data-close="1"></div>
+        <div class="attachment-preview-dialog" role="dialog" aria-modal="true"
+            aria-labelledby="attachment-preview-title">
+            <div class="attachment-preview-header">
+                <div class="attachment-preview-title" id="attachment-preview-title">Attachment preview</div>
+                <button type="button" class="attachment-preview-close" id="attachment-preview-close"
+                    aria-label="Close">✕</button>
+            </div>
+            <div class="attachment-preview-meta" id="attachment-preview-meta"></div>
+            <pre class="attachment-preview-content" id="attachment-preview-content"></pre>
+        </div>
+    </div>
+
 </body>
+
 </html>

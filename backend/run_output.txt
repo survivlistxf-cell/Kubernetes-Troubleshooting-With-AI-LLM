@@ -1,0 +1,132 @@
+﻿mvnd.cmd : Mar 05, 
+2026 8:50:43 AM 
+org.jline.utils.Log 
+logr
+At line:1 char:1
++ mvnd.cmd clean 
+spring-boot:run 2>&1 
+| Out-File -FilePath 
+C:\Users\axi ...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (Mar 05, 20   
+ 26 8:....utils.Lo    
+g logr:String) []    
+, RemoteException
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+WARNING: Unable to 
+create a system 
+terminal, creating a 
+dumb terminal (enable 
+debug logging for 
+more information)
+[main] WARNING 
+org.jline - Unable to 
+create a system 
+terminal, creating a 
+dumb terminal (enable 
+debug logging for 
+more information)
+[main] WARNING org.mvn
+daemon.mvnd.client.Dae
+monParameters - 
+Falling back to 
+finding JAVA_HOME by 
+running java 
+executable available 
+in PATH. You may want 
+to avoid this time 
+consuming task by 
+setting JAVA_HOME 
+environment variable 
+or by passing 
+java.home system 
+property through 
+command line or in 
+one of mvnd 
+configuration files.
+[INFO] Processing build on daemon 3306e2bb
+[INFO] Scanning for projects...
+[INFO] BuildTimeEventSpy is registered.
+[INFO] 
+[INFO] Using the SmartBuilder implementation with a thread count of 31
+[INFO] 
+[INFO] -------------------< com.example:springboot-backend >-------------------
+[INFO] Building springboot-backend 1.0.0
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- clean:3.2.0:clean (default-clean) @ springboot-backend ---
+[INFO] Deleting C:\Users\axine\Desktop\Licenta\Proiect\backend\target
+[INFO] 
+[INFO] >>> spring-boot:3.1.5:run (default-cli) > test-compile @ springboot-backend >>>
+[INFO] 
+[INFO] --- resources:3.3.1:resources (default-resources) @ springboot-backend ---
+[INFO] Copying 1 resource from src\main\resources to target\classes
+[INFO] Copying 0 resource from src\main\resources to target\classes
+[INFO] 
+[INFO] --- compiler:3.11.0:compile (default-compile) @ springboot-backend ---
+[INFO] Changes detected - recompiling the module! :source
+[INFO] Compiling 23 source files with javac [debug release 17] to target\classes
+[INFO] 
+[INFO] --- resources:3.3.1:testResources (default-testResources) @ springboot-backend ---
+[INFO] skip non existing resourceDirectory C:\Users\axine\Desktop\Licenta\Proiect\backend\src\test\resources
+[INFO] 
+[INFO] --- compiler:3.11.0:testCompile (default-testCompile) @ springboot-backend ---
+[INFO] Changes detected - recompiling the module! :dependency
+[INFO] Compiling 1 source file with javac [debug release 17] to target\test-classes
+[INFO] 
+[INFO] <<< spring-boot:3.1.5:run (default-cli) < test-compile @ springboot-backend <<<
+[INFO] 
+[INFO] 
+[INFO] --- spring-boot:3.1.5:run (default-cli) @ springboot-backend ---
+[INFO] Attaching agents: []
+[INFO] [stdout] 
+[INFO] [stdout]   .   ____          _            __ _ _
+[INFO] [stdout]  /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+[INFO] [stdout] ( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+[INFO] [stdout]  \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+[INFO] [stdout]   '  |____| .__|_| |_|_| |_\__, | / / / /
+[INFO] [stdout]  =========|_|==============|___/=/_/_/_/
+[INFO] [stdout]  :: Spring Boot ::                (v3.1.5)
+[INFO] [stdout] 
+[INFO] [stdout] 2026-03-05T08:50:51.074+02:00  INFO 2132 --- [           main] com.example.Application                  : Starting Application using Java 25.0.1 with PID 2132 (C:\Users\axine\Desktop\Licenta\Proiect\backend\target\classes started by axine in C:\Users\axine\Desktop\Licenta\Proiect\backend)
+[INFO] [stdout] 2026-03-05T08:50:51.076+02:00 DEBUG 2132 --- [           main] com.example.Application                  : Running with Spring Boot v3.1.5, Spring v6.0.13
+[INFO] [stdout] 2026-03-05T08:50:51.077+02:00  INFO 2132 --- [           main] com.example.Application                  : No active profile set, falling back to 1 default profile: "default"
+[INFO] [stdout] 2026-03-05T08:50:51.519+02:00  INFO 2132 --- [           main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+[INFO] [stdout] 2026-03-05T08:50:51.558+02:00  INFO 2132 --- [           main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 35 ms. Found 5 JPA repository interfaces.
+[INFO] [stdout] WARNING: A restricted method in java.lang.System has been called
+[INFO] [stdout] WARNING: java.lang.System::load has been called by org.apache.tomcat.jni.Library in an unnamed module (file:/C:/Users/axine/.m2/repository/org/apache/tomcat/embed/tomcat-embed-core/10.1.15/tomcat-embed-core-10.1.15.jar)
+[INFO] [stdout] WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+[INFO] [stdout] WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+[INFO] [stdout] 
+[INFO] [stdout] 2026-03-05T08:50:51.948+02:00  INFO 2132 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port(s): 8080 (http)
+[INFO] [stdout] 2026-03-05T08:50:51.957+02:00  INFO 2132 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+[INFO] [stdout] 2026-03-05T08:50:51.957+02:00  INFO 2132 --- [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.15]
+[INFO] [stdout] 2026-03-05T08:50:52.020+02:00  INFO 2132 --- [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+[INFO] [stdout] 2026-03-05T08:50:52.020+02:00  INFO 2132 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 896 ms
+[INFO] [stdout] 2026-03-05T08:50:52.124+02:00  INFO 2132 --- [           main] o.hibernate.jpa.internal.util.LogHelper  : HHH000204: Processing PersistenceUnitInfo [name: default]
+[INFO] [stdout] 2026-03-05T08:50:52.150+02:00  INFO 2132 --- [           main] org.hibernate.Version                    : HHH000412: Hibernate ORM core version 6.2.13.Final
+[INFO] [stdout] 2026-03-05T08:50:52.152+02:00  INFO 2132 --- [           main] org.hibernate.cfg.Environment            : HHH000406: Using bytecode reflection optimizer
+[INFO] [stdout] 2026-03-05T08:50:52.300+02:00  INFO 2132 --- [           main] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+[INFO] [stdout] 2026-03-05T08:50:52.311+02:00  INFO 2132 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+[INFO] [stdout] 2026-03-05T08:50:52.406+02:00  INFO 2132 --- [           main] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@4ee8051c
+[INFO] [stdout] 2026-03-05T08:50:52.407+02:00  INFO 2132 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+[INFO] [stdout] 2026-03-05T08:50:52.423+02:00  WARN 2132 --- [           main] org.hibernate.orm.deprecation            : HHH90000025: PostgreSQLDialect does not need to be specified explicitly using 'hibernate.dialect' (remove the property setting and it will be selected by default)
+[INFO] [stdout] 2026-03-05T08:50:53.020+02:00  INFO 2132 --- [           main] o.h.e.t.j.p.i.JtaPlatformInitiator       : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+[INFO] [stdout] 2026-03-05T08:50:53.095+02:00  INFO 2132 --- [           main] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+[INFO] [stdout] 2026-03-05T08:50:53.445+02:00  WARN 2132 --- [           main] JpaBaseConfiguration$JpaWebConfiguration : spring.jpa.open-in-view is enabled by default. Therefore, database queries may be performed during view rendering. Explicitly configure spring.jpa.open-in-view to disable this warning
+[INFO] [stdout] 2026-03-05T08:50:53.464+02:00  WARN 2132 --- [           main] .s.s.UserDetailsServiceAutoConfiguration : 
+[INFO] [stdout] 
+[INFO] [stdout] Using generated security password: 6ec18fb4-573c-4d04-bde6-540eb98bbb6a
+[INFO] [stdout] 
+[INFO] [stdout] This generated password is for development use only. Your security configuration must be updated before running your application in production.
+[INFO] [stdout] 
+[INFO] [stdout] 2026-03-05T08:50:53.506+02:00  INFO 2132 --- [           main] o.s.s.web.DefaultSecurityFilterChain     : Will secure any request with [org.springframework.security.web.session.DisableEncodeUrlFilter@646c872a, org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter@1d9bd4d6, org.springframework.security.web.context.SecurityContextHolderFilter@3a00237d, org.springframework.security.web.header.HeaderWriterFilter@26c2f767, org.springframework.security.web.authentication.logout.LogoutFilter@10280879, org.springframework.security.web.savedrequest.RequestCacheAwareFilter@341df373, org.springframework.security.web.servletapi.SecurityContextHolderAwareRequestFilter@51f009ef, org.springframework.security.web.authentication.AnonymousAuthenticationFilter@7298c2d9, org.springframework.security.web.access.ExceptionTranslationFilter@2d2afc39, org.springframework.security.web.access.intercept.AuthorizationFilter@638341b0]
+[INFO] [stdout] 2026-03-05T08:50:53.711+02:00  INFO 2132 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8080 (http) with context path ''
+[INFO] [stdout] 2026-03-05T08:50:53.717+02:00  INFO 2132 --- [           main] com.example.Application                  : Started Application in 2.899 seconds (process running for 3.098)

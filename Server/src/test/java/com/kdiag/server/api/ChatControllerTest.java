@@ -29,7 +29,7 @@ class ChatControllerTest {
         OllamaClient ollamaClient() {
       return new OllamaClient("http://localhost:11434", "llama3.1", 0.2, 60L) {
                 @Override
-                public String chat(String systemPrompt, String userPrompt) {
+                public String chat(java.util.List<java.util.Map<String, String>> messages) {
                     return "OK_FROM_OLLAMA";
                 }
             };

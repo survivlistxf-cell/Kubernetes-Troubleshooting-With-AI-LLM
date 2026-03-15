@@ -1,10 +1,15 @@
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\ai\AiEngine.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\ai\history\HistoryService.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\AiServerApplication.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\api\ApiExceptionHandler.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\api\ChatController.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\api\HealthController.java
-C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\docs\KubernetesDebugDocs.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\docs\KubernetesDocsScraper.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\docs\KubernetesDynamicSearcher.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\entities\KubernetesDocPage.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\entities\ProblemResolution.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\ollama\OllamaClient.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\ollama\package-info.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\protocol\KdiagModels.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\repositories\KubernetesDocPageRepository.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\repositories\ProblemResolutionRepository.java

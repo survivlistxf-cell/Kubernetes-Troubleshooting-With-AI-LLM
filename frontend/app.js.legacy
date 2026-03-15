@@ -327,7 +327,14 @@ function renderConversationList(container, conversations) {
                 thread.forEach(x => {
                     const um = (x.userMessage ?? x.user_message ?? '').toString();
                     const ar = (x.aiResponse ?? x.ai_response ?? '').toString();
-                    if (um) addMessage(um, 'user');
+                    if (um) {
+                        const atts = Array.isArray(x.attachments) ? x.attachments : [];
+                        if (atts.length) {
+                            addUserMessageWithAttachments(um, atts, true);
+                        } else {
+                            addMessage(um, 'user');
+                        }
+                    }
                     if (ar) addMessage(ar, 'assistant');
                 });
             } catch (e) {
@@ -495,17 +502,13 @@ promptForm.addEventListener('submit', async (e) => {
     hideWelcomeHeader();
     autoCollapseSidebar();
     
-    // Build message with attachments context
+    // Build message to send (attachments sent separately in payload; do NOT inline file contents)
     let fullMessage = message;
-    if (hasAttachments) {
-        fullMessage += '\n\n[Attached files]\n';
-        attachedFiles.forEach(file => {
-            fullMessage += `\nFile: ${file.name} (${formatFileSize(file.size)})\n\`\`\`${file.name.split('.').pop()}\n${file.content}\n\`\`\``;
-        });
-    }
-    
+
     // Add user message to chat
-    addMessage(message || `📎 ${attachedFiles.length} file(s) attached`, 'user');
+
+    const _filesSnapshot = attachedFiles.slice();
+    addUserMessageWithPrettyAttachments(message || '', _filesSnapshot);
     promptInput.value = '';
     promptInput.style.height = 'auto';
     attachedFiles = [];
@@ -515,7 +518,7 @@ promptForm.addEventListener('submit', async (e) => {
     showTypingIndicator();
     
     try {
-        const payload = { message: fullMessage };
+        const payload = { message: fullMessage, attachments: attachedFiles };
         const userId = localStorage.getItem('userId');
         if (userId) {
             payload.userId = userId;
@@ -2082,6 +2085,7 @@ function updateAttachmentsPreview() {
     attachedFiles.forEach((file, index) => {
         const item = document.createElement('div');
         item.className = 'attachment-item';
+        item.dataset.index = String(index);
         const icon = file._scanContext ? '🔍' : getFileIcon(file.name);
         item.innerHTML = `
             <span class="file-icon">${icon}</span>
@@ -2090,6 +2094,13 @@ function updateAttachmentsPreview() {
             <button type="button" class="remove-attachment" data-index="${index}" title="Remove file">✕</button>
         `;
         attachmentsPreview.appendChild(item);
+
+        // Click attachment to preview (ignore remove button)
+        item.addEventListener('click', (evt) => {
+            const isRemove = evt.target && (evt.target.closest && evt.target.closest('.remove-attachment'));
+            if (isRemove) return;
+            openAttachmentPreview(index);
+        });
     });
 
     attachmentsPreview.querySelectorAll('.remove-attachment').forEach(btn => {
@@ -2298,3 +2309,285 @@ styleSheet.textContent = `
 document.head.appendChild(styleSheet);
 
 console.log('Kubexplain Chat App Loaded! 🚀');
+
+
+/* ===============================
+   ATTACHMENT CONFIRMATION PATCH
+   =============================== */
+
+(function () {
+    function showAttachmentConfirmation() {
+        try {
+            if (!Array.isArray(attachedFiles) || attachedFiles.length === 0) return;
+
+            const count = attachedFiles.length;
+            const names = attachedFiles.map(f => f.name).join(", ");
+
+            if (typeof addMessage === "function") {
+                addMessage("system", `✔ Attachments received (${count}): ${names}`);
+                return;
+            }
+
+            const chatContainer =
+                document.getElementById("chat-messages") ||
+                document.querySelector(".chat-messages") ||
+                document.querySelector(".chat-container");
+
+            if (chatContainer) {
+                const msg = document.createElement("div");
+                msg.className = "system-message";
+                msg.style.opacity = "0.8";
+                msg.style.fontSize = "0.9em";
+                msg.style.margin = "6px 0";
+                msg.textContent = `✔ Attachments received (${count}): ${names}`;
+                chatContainer.appendChild(msg);
+            }
+
+        } catch (err) {
+            console.warn("Attachment confirmation failed:", err);
+        }
+    }
+
+    if (typeof promptForm !== "undefined" && promptForm) {
+        promptForm.addEventListener("submit", function () {
+            setTimeout(showAttachmentConfirmation, 100);
+        });
+    }
+})();
+
+
+
+
+/* ===============================
+   ATTACHMENT PREVIEW (CLICK TO VIEW)
+   =============================== */
+
+function ensureAttachmentPreviewModal() {
+    let modal = document.getElementById('attachment-preview-modal');
+    if (!modal) return null;
+
+    const closeBtn = document.getElementById('attachment-preview-close');
+    const backdrop = modal.querySelector('.attachment-preview-backdrop');
+
+    function close() {
+        modal.classList.add('hidden');
+        modal.setAttribute('aria-hidden', 'true');
+        document.body.style.overflow = '';
+    }
+
+    if (closeBtn && !closeBtn._bound) {
+        closeBtn._bound = true;
+        closeBtn.addEventListener('click', close);
+    }
+    if (backdrop && !backdrop._bound) {
+        backdrop._bound = true;
+        backdrop.addEventListener('click', close);
+    }
+    if (!document._attachmentPreviewEscBound) {
+        document._attachmentPreviewEscBound = true;
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') close();
+        });
+    }
+
+    return { modal, close };
+}
+
+function formatAttachmentContentForPreview(file) {
+    const name = file?.name || 'attachment';
+    const type = (file?.type || '').toLowerCase();
+    const ext = (name.split('.').pop() || '').toLowerCase();
+
+    let content = (file && typeof file.content === 'string') ? file.content : '';
+
+    // Try to pretty-print JSON (either by mime type or extension)
+    if (type.includes('json') || ext === 'json') {
+        try {
+            const parsed = JSON.parse(content);
+            content = JSON.stringify(parsed, null, 2);
+        } catch (_) {
+            // keep raw
+        }
+    }
+    return content;
+}
+
+function openAttachmentPreview(index) {
+    const helpers = ensureAttachmentPreviewModal();
+    if (!helpers) return;
+
+    const file = attachedFiles[index];
+    if (!file) return;
+
+    const { modal } = helpers;
+
+    const titleEl = document.getElementById('attachment-preview-title');
+    const metaEl = document.getElementById('attachment-preview-meta');
+    const contentEl = document.getElementById('attachment-preview-content');
+
+    if (titleEl) titleEl.textContent = file.name || 'Attachment';
+    if (metaEl) {
+        const parts = [
+            file.type ? `Type: ${file.type}` : null,
+            typeof file.size === 'number' ? `Size: ${formatFileSize(file.size)}` : null,
+            file._scanContext ? 'Source: scan-context' : null,
+            file._kdiagPayload ? 'Protocol: kdiag' : null
+        ].filter(Boolean);
+        metaEl.textContent = parts.join(' • ');
+    }
+    if (contentEl) {
+        const preview = formatAttachmentContentForPreview(file);
+        contentEl.textContent = preview || '(No preview available for this attachment)';
+    }
+
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+}
+
+
+
+/* ===============================
+   CHAT ATTACHMENTS (PRETTY + CLICK PREVIEW)
+   =============================== */
+
+// Store attachments for messages that were already sent (since attachedFiles is cleared after send)
+const sentMessageAttachments = new Map(); // messageId -> file[]
+let _sentMessageAutoId = 0;
+
+function getChatAttachmentIcon(file) {
+    try {
+        return file?._scanContext ? '🔍' : getFileIcon(file?.name || '');
+    } catch (_) {
+        return '📎';
+    }
+}
+
+function escapeHtml(str) {
+    return String(str)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function renderChatAttachmentsHtml(files, messageId) {
+    if (!Array.isArray(files) || files.length === 0) return '';
+    const chips = files.map((f, idx) => {
+        const icon = getChatAttachmentIcon(f);
+        const name = escapeHtml(f.name || 'attachment');
+        const size = typeof f.size === 'number' ? escapeHtml(formatFileSize(f.size)) : '';
+        return `
+          <div class="chat-attachment-chip" data-msg="${messageId}" data-idx="${idx}" title="Click to preview">
+            <span class="chat-attachment-icon">${icon}</span>
+            <span class="chat-attachment-name">${name}</span>
+            ${size ? `<span class="chat-attachment-size">${size}</span>` : ``}
+          </div>
+        `;
+    }).join('');
+    return `<div class="chat-attachments">${chips}</div>`;
+}
+
+// Delegate click from chat to open preview
+(function bindChatAttachmentClicks() {
+    if (!messagesArea || messagesArea._chatAttachBound) return;
+    messagesArea._chatAttachBound = true;
+
+    messagesArea.addEventListener('click', (e) => {
+        const chip = e.target?.closest?.('.chat-attachment-chip');
+        if (!chip) return;
+
+        const msgId = chip.getAttribute('data-msg');
+        const idx = parseInt(chip.getAttribute('data-idx') || '0', 10);
+
+        const files = sentMessageAttachments.get(msgId);
+        if (!files || !files[idx]) return;
+
+        // Open the same preview modal, but using a one-off "virtual" index into attachedFiles
+        const file = files[idx];
+
+        const helpers = ensureAttachmentPreviewModal?.();
+        if (!helpers) return;
+
+        const titleEl = document.getElementById('attachment-preview-title');
+        const metaEl = document.getElementById('attachment-preview-meta');
+        const contentEl = document.getElementById('attachment-preview-content');
+
+        if (titleEl) titleEl.textContent = file.name || 'Attachment';
+        if (metaEl) {
+            const parts = [
+                file.type ? `Type: ${file.type}` : null,
+                typeof file.size === 'number' ? `Size: ${formatFileSize(file.size)}` : null,
+                file._scanContext ? 'Source: scan-context' : null,
+                file._kdiagPayload ? 'Protocol: kdiag' : null
+            ].filter(Boolean);
+            metaEl.textContent = parts.join(' • ');
+        }
+        if (contentEl) {
+            const preview = formatAttachmentContentForPreview?.(file);
+            contentEl.textContent = preview || '(No preview available for this attachment)';
+        }
+
+        const modal = document.getElementById('attachment-preview-modal');
+        if (modal) {
+            modal.classList.remove('hidden');
+            modal.setAttribute('aria-hidden', 'false');
+            document.body.style.overflow = 'hidden';
+        }
+    });
+})();
+
+
+
+function addUserMessageWithPrettyAttachments(messageText, filesSnapshot) {
+    const msgId = `m${Date.now()}_${++_sentMessageAutoId}`;
+    sentMessageAttachments.set(msgId, (filesSnapshot || []).map(f => ({...f})));
+
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message user';
+
+    const avatarDiv = document.createElement('div');
+    avatarDiv.className = 'message-avatar';
+    avatarDiv.textContent = 'You';
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+
+    const safeText = escapeHtml(messageText || '');
+    const attachmentsHtml = renderChatAttachmentsHtml(filesSnapshot || [], msgId);
+
+    // Show only file titles (chips) — NOT file contents
+    contentDiv.innerHTML = `${safeText || (filesSnapshot?.length ? '📎 Attachments' : '')}${attachmentsHtml}`;
+
+    messageDiv.appendChild(avatarDiv);
+    messageDiv.appendChild(contentDiv);
+    messagesArea.appendChild(messageDiv);
+    messagesArea.scrollTop = messagesArea.scrollHeight;
+}
+
+
+
+function addUserMessageWithAttachments(messageText, files, isServerMeta = false) {
+    const messageId = `m${Date.now()}_${Math.floor(Math.random()*1e9)}`;
+
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message user';
+
+    const avatarDiv = document.createElement('div');
+    avatarDiv.className = 'message-avatar';
+    avatarDiv.textContent = 'You';
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-content';
+
+    const safeText = escapeHtml(messageText || '');
+    const attachmentsHtml = renderChatAttachmentsHtml(files || [], messageId, isServerMeta);
+
+    contentDiv.innerHTML = `${safeText || (files?.length ? '📎 Attachments' : '')}${attachmentsHtml}`;
+
+    messageDiv.appendChild(avatarDiv);
+    messageDiv.appendChild(contentDiv);
+    messagesArea.appendChild(messageDiv);
+    messagesArea.scrollTop = messagesArea.scrollHeight;
+}

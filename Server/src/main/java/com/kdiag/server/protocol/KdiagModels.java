@@ -1,5 +1,6 @@
 package com.kdiag.server.protocol;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -22,11 +23,10 @@ public final class KdiagModels {
 
     public static class KdiagChatRequest {
         @NotBlank
+        @JsonProperty("protocol_version")
         private String protocol_version;
 
-        /**
-         * If missing, server will generate one.
-         */
+        @JsonProperty("conversation_id")
         private String conversation_id;
 
         @NotNull
@@ -34,25 +34,29 @@ public final class KdiagModels {
         private Message message;
 
         @Valid
-        private Context context;
+        private Context context; // Spune despre CE obiecte vorbim (identitate)
 
         @Valid
-        private List<Artifact> artifacts;
+        private List<Artifact> artifacts; // Spune CE dovezi avem despre ele (date brute)
 
         private Map<String, Object> preferences;
 
+        @JsonProperty("protocol_version")
         public String getProtocol_version() {
             return protocol_version;
         }
 
+        @JsonProperty("protocol_version")
         public void setProtocol_version(String protocol_version) {
             this.protocol_version = protocol_version;
         }
 
+        @JsonProperty("conversation_id")
         public String getConversation_id() {
             return conversation_id;
         }
 
+        @JsonProperty("conversation_id")
         public void setConversation_id(String conversation_id) {
             this.conversation_id = conversation_id;
         }
@@ -65,7 +69,7 @@ public final class KdiagModels {
             this.message = message;
         }
 
-        public Context getContext() {
+        public Context getContext() { 
             return context;
         }
 
@@ -91,23 +95,34 @@ public final class KdiagModels {
     }
 
     public static class KdiagChatResponse {
+        @JsonProperty("protocol_version")
         private String protocol_version;
+        
+        @JsonProperty("conversation_id")
         private String conversation_id;
+        
+        @JsonProperty("assistant_message")
         private AssistantMessage assistant_message;
+        
+        @JsonProperty("actions_requested")
         private List<ActionRequested> actions_requested;
 
+        @JsonProperty("protocol_version")
         public String getProtocol_version() {
             return protocol_version;
         }
 
+        @JsonProperty("protocol_version")
         public void setProtocol_version(String protocol_version) {
             this.protocol_version = protocol_version;
         }
 
+        @JsonProperty("conversation_id")
         public String getConversation_id() {
             return conversation_id;
         }
 
+        @JsonProperty("conversation_id")
         public void setConversation_id(String conversation_id) {
             this.conversation_id = conversation_id;
         }

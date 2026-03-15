@@ -1,102 +1,154 @@
 package com.kdiag.server.docs;
 
+import com.kdiag.server.entities.KubernetesDocPage;
+import com.kdiag.server.repositories.KubernetesDocPageRepository;
+import jakarta.annotation.PostConstruct;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Fetches and caches Kubernetes debug documentation pages.
- * On each chat request, searches for sections relevant to the user's message.
+ * Fetches and caches Kubernetes debug documentation pages into DB.
+ * On each chat request, searches for pages relevant to the user's message.
  */
 @Component
 public class KubernetesDocsScraper {
 
+    private static final Logger logger = LoggerFactory.getLogger(KubernetesDocsScraper.class);
+
+    private final KubernetesDocPageRepository repository;
+    private final RestTemplate restTemplate;
+
+    private Set<String> stopWords = new HashSet<>();
+    private long lastStopwordsFetch = 0;
+
     // Pages to index - ordered by relevance
     private static final List<String> DOC_URLS = List.of(
-        "https://kubernetes.io/docs/tasks/debug/debug-application/",
-        "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/",
-        "https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/",
-        "https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/",
-        "https://kubernetes.io/docs/tasks/debug/debug-cluster/"
+            "https://kubernetes.io/docs/tasks/debug/debug-application/",
+            "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/",
+            "https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/",
+            "https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/",
+            "https://kubernetes.io/docs/tasks/debug/debug-cluster/"
     );
 
-    // Cache entries: url -> (text, fetchedAt)
-    private final Map<String, CachedPage> cache = new ConcurrentHashMap<>();
-
-    // Cache TTL options:
-    private static final long CACHE_TTL_SECONDS = 3600;       // 1 oră (default)
-    // private static final long CACHE_TTL_SECONDS = 86400;   // 24 ore (pentru producție)
-    // private static final long CACHE_TTL_SECONDS = 300;     // 5 minute (pentru development/test)
-
     // Max chars to inject per request (keep prompt size sane)
-    private static final int MAX_CONTEXT_CHARS = 3000;
+    private static final int MAX_CONTEXT_CHARS = 4000;
 
-    private static class CachedPage {
-        final String text;
-        final List<Section> sections;
-        final Instant fetchedAt;
+    public KubernetesDocsScraper(KubernetesDocPageRepository repository) {
+        this.repository = repository;
+        this.restTemplate = new RestTemplate();
+    }
 
-        CachedPage(String text, List<Section> sections) {
-            this.text = text;
-            this.sections = sections;
-            this.fetchedAt = Instant.now();
-        }
-
-        boolean isExpired() {
-            return Instant.now().getEpochSecond() - fetchedAt.getEpochSecond() > CACHE_TTL_SECONDS;
+    private void ensureStopwordsLoaded() {
+        // Cache for 24 hours
+        if (System.currentTimeMillis() - lastStopwordsFetch > 24 * 60 * 60 * 1000L || stopWords.isEmpty()) {
+            try {
+                logger.info("Fetching English stop words from NLTK/GitHub API...");
+                // Fetch standard english stopwords list from a reliable public source
+                String url = "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/stopwords.zip/stopwords/english";
+                String response = restTemplate.getForObject(url, String.class);
+                
+                if (response != null) {
+                    Set<String> fetched = new HashSet<>();
+                    for (String line : response.split("\n")) {
+                        if (!line.trim().isEmpty()) {
+                            fetched.add(line.trim().toLowerCase());
+                        }
+                    }
+                    this.stopWords = fetched;
+                    this.lastStopwordsFetch = System.currentTimeMillis();
+                    logger.info("Loaded {} stop words from API.", stopWords.size());
+                }
+            } catch (Exception e) {
+                logger.error("Failed to fetch stopwords from API, falling back to minimal list", e);
+                // Minimal fallback in case of no internet on boot
+                if (stopWords.isEmpty()) {
+                    stopWords = new HashSet<>(Arrays.asList("the", "and", "a", "an", "in", "on", "at", "to", "for", "of", "with"));
+                }
+            }
         }
     }
 
-    private static class Section {
-        final String heading;
-        final String content;
-        final String url;
+    @PostConstruct
+    public void initStaticDocs() {
+        logger.info("Checking static docs in DB...");
+        for (String url : DOC_URLS) {
+            if (repository.findByUrl(url).isEmpty()) {
+                try {
+                    logger.info("Fetching initial static doc: {}", url);
+                    Document doc = Jsoup.connect(url)
+                            .userAgent("Mozilla/5.0 (compatible; Kubexplain/1.0)")
+                            .timeout(8000)
+                            .get();
 
-        Section(String heading, String content, String url) {
-            this.heading = heading;
-            this.content = content;
-            this.url = url;
+                    Element main = doc.selectFirst("main, article, .td-content, #content");
+                    if (main == null) {
+                        main = doc.body();
+                    }
+
+                    String text = extractCleanText(main);
+                    String title = doc.title();
+                    if (title == null || title.isBlank()) {
+                        title = "Kubernetes Documentation";
+                    }
+
+                    KubernetesDocPage page = new KubernetesDocPage(url, title, truncate(text, 15000), false);
+                    repository.save(page);
+                } catch (Exception e) {
+                    logger.error("Failed to fetch static doc {}", url, e);
+                }
+            }
         }
+    }
+
+    private String extractCleanText(Element root) {
+        StringBuilder sb = new StringBuilder();
+        for (Element el : root.select("h1, h2, h3, p, pre, code, li")) {
+            String text = el.text().trim();
+            if (!text.isEmpty()) {
+                // If code, format as markdown
+                if (el.tagName().equals("pre") || el.tagName().equals("code")) {
+                    sb.append("`").append(text).append("`\n");
+                } else if (el.tagName().matches("h[123]")) {
+                    sb.append("\n").append(text).append("\n"); // Heading spacing
+                } else {
+                    sb.append(text).append("\n");
+                }
+            }
+        }
+        return sb.toString().trim();
     }
 
     /**
      * Returns relevant documentation snippets for the given user message.
-     * Falls back to static snippet if all fetches fail.
+     * Falls back to static snippet if DB is empty.
      */
     public String getRelevantDocs(String userMessage) {
-        List<Section> allSections = new ArrayList<>();
+        List<KubernetesDocPage> allPages = repository.findAll();
 
-        for (String url : DOC_URLS) {
-            try {
-                CachedPage page = getOrFetch(url);
-                if (page != null) {
-                    allSections.addAll(page.sections);
-                }
-            } catch (Exception e) {
-                System.err.println("[KubernetesDocsScraper] Failed to fetch " + url + ": " + e.getMessage());
-            }
-        }
-
-        if (allSections.isEmpty()) {
+        if (allPages.isEmpty()) {
             return getFallbackSnippet();
         }
 
-        // Score sections by keyword relevance
-        List<Section> ranked = rankSections(allSections, userMessage);
+        // Score pages by keyword relevance
+        List<KubernetesDocPage> ranked = rankPages(allPages, userMessage);
 
-        // Build context string from top sections
+        // Build context string from top pages
         StringBuilder sb = new StringBuilder();
         sb.append("=== Relevant Kubernetes Documentation ===\n");
         int chars = 0;
-        for (Section s : ranked) {
-            if (chars >= MAX_CONTEXT_CHARS) break;
-            String entry = "## " + s.heading + "\n" + s.content + "\nSource: " + s.url + "\n\n";
+        for (KubernetesDocPage p : ranked) {
+            String snippet = truncate(p.getTextContent(), 1200); // Send up to 1200 chars per page
+            String entry = "## " + p.getTitle() + "\n" + snippet + "\nSource: " + p.getUrl() + "\n\n";
+            if (chars + entry.length() > MAX_CONTEXT_CHARS && chars > 0) {
+                break;
+            }
             sb.append(entry);
             chars += entry.length();
         }
@@ -105,96 +157,18 @@ public class KubernetesDocsScraper {
         return sb.toString();
     }
 
-    private CachedPage getOrFetch(String url) throws Exception {
-        CachedPage cached = cache.get(url);
-        if (cached != null && !cached.isExpired()) {
-            return cached;
-        }
-
-        System.out.println("[KubernetesDocsScraper] Fetching: " + url);
-
-        Document doc = Jsoup.connect(url)
-                .userAgent("Mozilla/5.0 (compatible; Kubexplain/1.0)")
-                .timeout(8000)
-                .get();
-
-        // Extract main content area
-        Element main = doc.selectFirst("main, article, .td-content, #content");
-        if (main == null) {
-            main = doc.body();
-        }
-
-        List<Section> sections = extractSections(main, url);
-        String fullText = main.text();
-
-        CachedPage page = new CachedPage(fullText, sections);
-        cache.put(url, page);
-        return page;
-    }
-
-    private List<Section> extractSections(Element root, String pageUrl) {
-        List<Section> sections = new ArrayList<>();
-
-        // Find all headings (h2, h3) and collect their following content
-        Elements headings = root.select("h2, h3");
-
-        for (Element heading : headings) {
-            String headingText = heading.text().trim();
-            if (headingText.isEmpty()) continue;
-
-            // Collect text from sibling elements until next heading
-            StringBuilder contentSb = new StringBuilder();
-            Element next = heading.nextElementSibling();
-            int limit = 0;
-            while (next != null && !next.tagName().matches("h[123]") && limit < 8) {
-                String t = next.text().trim();
-                if (!t.isEmpty()) {
-                    contentSb.append(t).append("\n");
-                }
-                // Also collect code blocks
-                Elements codes = next.select("code, pre");
-                for (Element code : codes) {
-                    String codeText = code.text().trim();
-                    if (!codeText.isEmpty() && !contentSb.toString().contains(codeText)) {
-                        contentSb.append("`").append(codeText).append("`\n");
-                    }
-                }
-                next = next.nextElementSibling();
-                limit++;
-            }
-
-            String content = contentSb.toString().trim();
-            if (!content.isEmpty()) {
-                sections.add(new Section(headingText, content, pageUrl));
-            }
-        }
-
-        // If no headings found, add the whole page as one section
-        if (sections.isEmpty()) {
-            String text = root.text();
-            if (!text.isBlank()) {
-                sections.add(new Section("Kubernetes Debugging", truncate(text, 1500), pageUrl));
-            }
-        }
-
-        return sections;
-    }
-
     /**
-     * Rank sections by keyword overlap with userMessage.
-     * Simple TF-style scoring — no ML needed.
+     * Rank pages by keyword overlap with userMessage.
      */
-    private List<Section> rankSections(List<Section> sections, String userMessage) {
+    private List<KubernetesDocPage> rankPages(List<KubernetesDocPage> pages, String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
-            return sections.subList(0, Math.min(3, sections.size()));
+            return pages.subList(0, Math.min(3, pages.size()));
         }
+
+        ensureStopwordsLoaded();
 
         String lower = userMessage.toLowerCase();
         // Extract keywords (words > 3 chars, skip stop words)
-        Set<String> stopWords = Set.of("the", "and", "for", "that", "this", "with", "from",
-                "are", "was", "have", "has", "can", "will", "not", "what", "how", "why",
-                "cum", "care", "sunt", "sau", "din", "pentru", "mai");  // ← "este" apare o singură dată
-
         String[] words = lower.split("[^a-zA-Z0-9àâîșțăÀÂÎȘȚĂ]+");
         List<String> keywords = new ArrayList<>();
         for (String w : words) {
@@ -203,10 +177,10 @@ public class KubernetesDocsScraper {
             }
         }
 
-        // Score each section
-        List<Map.Entry<Section, Integer>> scored = new ArrayList<>();
-        for (Section s : sections) {
-            String combined = (s.heading + " " + s.content).toLowerCase();
+        // Score each page
+        List<Map.Entry<KubernetesDocPage, Integer>> scored = new ArrayList<>();
+        for (KubernetesDocPage p : pages) {
+            String combined = ((p.getTitle() == null ? "" : p.getTitle()) + " " + (p.getTextContent() == null ? "" : p.getTextContent())).toLowerCase();
             int score = 0;
             for (String kw : keywords) {
                 int idx = 0;
@@ -215,18 +189,24 @@ public class KubernetesDocsScraper {
                     idx += kw.length();
                 }
             }
-            // Boost heading matches
-            String headingLower = s.heading.toLowerCase();
-            for (String kw : keywords) {
-                if (headingLower.contains(kw)) score += 5;
+            // Boost title matches
+            if (p.getTitle() != null) {
+                String titleLower = p.getTitle().toLowerCase();
+                for (String kw : keywords) {
+                    if (titleLower.contains(kw)) score += 5;
+                }
             }
-            scored.add(Map.entry(s, score));
+            // Boost dynamic pages a little extra so they show up if searched
+            if (p.isDynamic()) {
+                score += 2;
+            }
+            scored.add(Map.entry(p, score));
         }
 
         scored.sort((a, b) -> b.getValue() - a.getValue());
 
-        // Return top 4 sections
-        List<Section> result = new ArrayList<>();
+        // Return top 4 pages
+        List<KubernetesDocPage> result = new ArrayList<>();
         for (int i = 0; i < Math.min(4, scored.size()); i++) {
             result.add(scored.get(i).getKey());
         }
@@ -248,23 +228,7 @@ public class KubernetesDocsScraper {
         return s.length() <= max ? s : s.substring(0, max) + "...[truncated]";
     }
 
-    /** Force-refresh the cache (e.g., on demand via admin endpoint). */
-    public void clearCache() {
-        cache.clear();
-    }
-
-    /** Returns cache status for health checks. */
-    public Map<String, Object> getCacheStatus() {
-        Map<String, Object> status = new LinkedHashMap<>();
-        status.put("cachedPages", cache.size());
-        status.put("totalUrls", DOC_URLS.size());
-        cache.forEach((url, page) -> {
-            status.put(url, Map.of(
-                "sections", page.sections.size(),
-                "expired", page.isExpired(),
-                "ageSeconds", Instant.now().getEpochSecond() - page.fetchedAt.getEpochSecond()
-            ));
-        });
-        return status;
+    public Map<String, Object> getStatus() {
+        return Map.of("pagesInDb", repository.count());
     }
 }

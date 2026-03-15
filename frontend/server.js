@@ -152,7 +152,7 @@ function probeBackend(baseUrl) {
             });
 
             pingReq.on('timeout', () => {
-                try { pingReq.destroy(); } catch {}
+                try { pingReq.destroy(); } catch { }
                 tryNext(idx + 1);
             });
             pingReq.on('error', () => tryNext(idx + 1));
@@ -206,7 +206,7 @@ function proxyRequest(req, res, baseUrl, index) {
             host: targetUrl.host
         },
         // Node details can take >15s on slow clusters (first kubectl call). Keep proxy generous.
-        timeout: 25000
+        timeout: 30000
     };
 
     console.log(`📡 Proxying ${req.method} ${req.originalUrl} to ${targetUrl.href}`);
@@ -246,12 +246,12 @@ function proxyRequest(req, res, baseUrl, index) {
         finalize();
         try {
             proxyReq.destroy();
-        } catch {}
+        } catch { }
         proxyRequest(req, res, baseUrl, index + 1);
     };
 
     // Ensure timeout triggers reliably on the request socket.
-    proxyReq.setTimeout(25000, () => {
+    proxyReq.setTimeout(30000, () => {
         retryNext(`❌ Backend request timeout for ${candidateUrl}`);
     });
 
@@ -263,7 +263,7 @@ function proxyRequest(req, res, baseUrl, index) {
     res.on('close', () => {
         try {
             proxyReq.destroy();
-        } catch {}
+        } catch { }
     });
 
     const methodsWithBody = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);

@@ -3,18 +3,16 @@ package com.example.entities;
 import jakarta.persistence.*;
 
 @Entity
-@Table(
-    name = "conversations",
-    indexes = {
+@Table(name = "conversations", indexes = {
         @Index(name = "idx_conv_user_id", columnList = "user_id"),
         @Index(name = "idx_conv_updated_at", columnList = "updated_at")
-    }
-)
+})
 public class Conversation {
 
     /**
      * We use the client-generated conversationId (UUID string) as the primary key.
-     * This keeps the existing frontend id stable and avoids migrations from numeric ids.
+     * This keeps the existing frontend id stable and avoids migrations from numeric
+     * ids.
      */
     @Id
     @Column(name = "conversation_id", length = 100)
@@ -24,11 +22,12 @@ public class Conversation {
     @JoinColumn(name = "user_id")
     private User user;
 
-    @Column(name = "conversation_title", length = 255)
+    @Column(name = "title", length = 255)
     private String title;
 
     /**
-     * When true, the title was explicitly edited by the user and should not be overwritten
+     * When true, the title was explicitly edited by the user and should not be
+     * overwritten
      * by the auto-title heuristics/AI regeneration.
      */
     @Column(name = "is_title_custom")
@@ -43,7 +42,8 @@ public class Conversation {
     @PrePersist
     protected void onCreate() {
         java.time.LocalDateTime now = java.time.LocalDateTime.now();
-        if (this.createdAt == null) this.createdAt = now;
+        if (this.createdAt == null)
+            this.createdAt = now;
         this.updatedAt = now;
     }
 
@@ -55,7 +55,8 @@ public class Conversation {
     public Conversation() {
     }
 
-    public Conversation(String conversationId, User user, String title, java.time.LocalDateTime createdAt, java.time.LocalDateTime updatedAt) {
+    public Conversation(String conversationId, User user, String title, java.time.LocalDateTime createdAt,
+            java.time.LocalDateTime updatedAt) {
         this.conversationId = conversationId;
         this.user = user;
         this.title = title;

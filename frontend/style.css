@@ -356,12 +356,14 @@ html, body {
 .chat-container {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   margin-bottom: 2rem;
   background-color: rgba(255, 255, 255, 0.5);
   border-radius: 1rem;
   padding: 1.5rem;
   border: 2px solid var(--ash-grey);
   width: 100%;
+  box-sizing: border-box;
 }
 
 .messages-area {
@@ -428,6 +430,17 @@ html, body {
   line-height: 1.5;
   word-wrap: break-word;
   transition: box-shadow 0.3s ease;
+}
+
+.inline-code {
+  background-color: rgba(0, 0, 0, 0.08);
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.3rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.9em;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .message.user .message-content {
@@ -2110,4 +2123,184 @@ button:focus-visible {
     padding: 2rem 1rem;
     font-size: 0.95rem;
     opacity: 0.8;
+}
+
+/* ===============================
+   ATTACHMENT PREVIEW MODAL
+   =============================== */
+.attachment-item { cursor: pointer; }
+.attachment-item .remove-attachment { cursor: pointer; }
+
+.attachment-preview-modal.hidden { display: none; }
+.attachment-preview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+.attachment-preview-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+}
+.attachment-preview-dialog {
+  position: relative;
+  width: min(920px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  margin: 12px auto;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid rgba(148,163,184,0.25);
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.35);
+  display: flex;
+  flex-direction: column;
+}
+.attachment-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(148,163,184,0.18);
+}
+.attachment-preview-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-preview-close {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+.attachment-preview-close:hover {
+  background: rgba(148,163,184,0.12);
+}
+.attachment-preview-meta {
+  padding: 10px 14px;
+  font-size: 12px;
+  opacity: 0.85;
+  border-bottom: 1px solid rgba(148,163,184,0.12);
+}
+.attachment-preview-content {
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+
+/* ===============================
+   CHAT ATTACHMENTS (PRETTY)
+   =============================== */
+.chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.chat-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,0.12);
+  background: rgba(255,255,255,0.25);
+  cursor: pointer;
+  user-select: none;
+  max-width: 100%;
+}
+.message.user .chat-attachment-chip {
+  border-color: rgba(0,0,0,0.18);
+  background: rgba(255,255,255,0.22);
+}
+.chat-attachment-chip:hover {
+  filter: brightness(0.98);
+}
+.chat-attachment-icon {
+  width: 18px;
+  min-width: 18px;
+  text-align: center;
+}
+.chat-attachment-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+}
+.chat-attachment-size {
+  opacity: 0.75;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Code and Cmd Blocks */
+.code-block-wrapper, .cmd-block-wrapper {
+  margin: 1rem 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #1e293b;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.code-block-header, .cmd-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.code-block, .cmd-block-code {
+  margin: 0;
+  padding: 1rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #e2e8f0;
+}
+
+.copy-btn, .cmd-copy-btn {
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #94a3b8;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  transition: all 0.2s;
+}
+
+.copy-btn:hover, .cmd-copy-btn:hover {
+  background: rgba(148, 163, 184, 0.1);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+.copy-btn svg, .cmd-copy-btn svg {
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
 }

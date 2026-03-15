@@ -7,6 +7,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 
+// <Tip de data, Tipul Primary Key-ului>
 @Repository
 public interface ConversationRepository extends JpaRepository<Conversation, String> {
     List<Conversation> findByUserOrderByUpdatedAtDesc(User user);

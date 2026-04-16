@@ -78,3 +78,34 @@ export function deriveTitleFrom(c) {
   const one = String(m).replace(/\r?\n/g, ' ').trim();
   return one.length <= 60 ? one : one.substring(0, 57) + '...';
 }
+
+/** Shared Scanner Utils **/
+
+export function updateBulkUIComponent({ bulkOptions, selectedCountEl, bulkAddBtn, selectAllCheckbox }, selectedSet, allItems) {
+  if (!bulkOptions || !selectedCountEl || !bulkAddBtn) return;
+  const count = selectedSet.size;
+  selectedCountEl.textContent = count;
+  bulkAddBtn.disabled = count === 0;
+  bulkAddBtn.style.opacity = count === 0 ? '0.6' : '1';
+  
+  if (selectAllCheckbox) {
+    selectAllCheckbox.checked = allItems.length > 0 && selectedSet.size === allItems.length;
+  }
+}
+
+export function syncCheckboxes(container, selector, dataAttr, selectedSet) {
+  if (!container) return;
+  container.querySelectorAll(selector).forEach(cb => {
+    const val = cb.getAttribute(dataAttr);
+    cb.checked = selectedSet.has(val);
+  });
+}
+
+export function createHelperButton(label, icon, onClick) {
+  const btn = document.createElement('button');
+  btn.className = 'btn-helper';
+  btn.innerHTML = `<span>${icon}</span> ${label}`;
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+

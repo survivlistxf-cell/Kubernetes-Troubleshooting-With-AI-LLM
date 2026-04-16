@@ -49,7 +49,8 @@ public class ChatController {
         }
 
         // Forward to AI server
-        AiForwardingService.ForwardResult forwardResult = aiService.forward(userId, conversationId, userMessage, attachmentsObj, requestId);
+        AiForwardingService.ForwardResult forwardResult = aiService.forward(userId, conversationId, userMessage,
+                attachmentsObj, requestId);
         String aiResponse = forwardResult != null ? forwardResult.text() : null;
         if (forwardResult != null && forwardResult.conversationId() != null) {
             conversationId = forwardResult.conversationId();
@@ -272,6 +273,16 @@ public class ChatController {
         String finalTitle = chatService.regenerateTitle(conversationId, String.valueOf(userId),
                 UUID.randomUUID().toString(), true);
         return ResponseEntity.ok(Map.of("conversationId", conversationId, "title", finalTitle));
+    }
+
+    @PostMapping("/conversation/{conversationId}/feedback")
+    public ResponseEntity<?> submitFeedback(@PathVariable String conversationId, @RequestBody Map<String, Integer> body) {
+        Integer score = body.get("score");
+        if (score == null) return ResponseEntity.badRequest().body(Map.of("message", "score required"));
+        
+        chatService.updateFeedback(conversationId, score);
+        aiService.submitFeedback(conversationId, score);
+        return ResponseEntity.ok(Map.of("success", true));
     }
 
 }

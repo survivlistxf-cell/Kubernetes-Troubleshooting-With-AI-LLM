@@ -25,7 +25,7 @@ function showTypingIndicator() {
   typingDiv.appendChild(avatarDiv);
   typingDiv.appendChild(contentDiv);
   messagesArea.appendChild(typingDiv);
-  
+
   setTimeout(() => {
     messagesArea.scrollTop = messagesArea.scrollHeight;
     typingDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -38,10 +38,11 @@ function removeTypingIndicator() {
 }
 
 //adauga mesajul userului/AI-ului in messageArea
-export function addMessage(text, sender) {
+export function addMessage(text, sender, score = 0) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${sender}`;
-
+  // We attach the message ID or conversation ID as needed. For current conv, state provides it.
+  
   const avatarDiv = document.createElement('div');
   avatarDiv.className = 'message-avatar';
   avatarDiv.textContent = sender === 'user' ? 'You' : 'AI';
@@ -49,19 +50,42 @@ export function addMessage(text, sender) {
   const contentDiv = document.createElement('div');
   contentDiv.className = 'message-content';
 
-  contentDiv.innerHTML = renderMarkdown(text);
+  let feedbackHtml = '';
+  if (sender === 'assistant') {
+      feedbackHtml = `
+      <div class="feedback-buttons">
+          <button class="feedback-btn like-btn ${score === 1 ? 'active' : ''}" title="Helpful" aria-label="Helpful">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-thumbs-up"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2A3.13 3.13 0 0 1 15 5.88Z"/></svg>
+          </button>
+          <button class="feedback-btn dislike-btn ${score === -1 ? 'active' : ''}" title="Not helpful" aria-label="Not helpful">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-thumbs-down"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>
+          </button>
+      </div>`;
+  }
+
+  contentDiv.innerHTML = renderMarkdown(text) + feedbackHtml;
   attachCopyListeners(contentDiv);
+
+  if (sender === 'assistant') {
+      const likeBtn = contentDiv.querySelector('.like-btn');
+      const dislikeBtn = contentDiv.querySelector('.dislike-btn');
+      if (likeBtn && dislikeBtn) {
+          likeBtn.addEventListener('click', () => submitFeedback(1, likeBtn, dislikeBtn));
+          dislikeBtn.addEventListener('click', () => submitFeedback(-1, dislikeBtn, likeBtn));
+      }
+  }
 
   messageDiv.appendChild(avatarDiv);
   messageDiv.appendChild(contentDiv);
   messagesArea.appendChild(messageDiv);
-  
+
   // Asigură scroll la final după ce DOM-ul e updatat
   setTimeout(() => {
     messagesArea.scrollTop = messagesArea.scrollHeight;
     messageDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, 50);
 }
+
 
 //adauga mesajul userului in messageArea, impreuna cu atasamentele
 export function addUserMessageWithAttachments(messageText, files, isServerMeta = false) {
@@ -95,7 +119,7 @@ export function addUserMessageWithAttachments(messageText, files, isServerMeta =
   messageDiv.appendChild(avatarDiv);
   messageDiv.appendChild(contentDiv);
   area.appendChild(messageDiv);
-  
+
   // Asigură scroll la final după ce DOM-ul e updatat
   setTimeout(() => {
     area.scrollTop = area.scrollHeight;
@@ -326,3 +350,33 @@ export function initChat() {
 
   bindChatAttachmentClicks(messagesArea);
 }
+
+
+export function submitFeedback(score, clickedBtn, otherBtn) {
+  if (clickedBtn.classList.contains('active')) return;
+
+  const currentConvId = localStorage.getItem(state.conversationIdKey);
+  if (!currentConvId) return;
+
+  clickedBtn.classList.add('active');
+  if (otherBtn) otherBtn.classList.remove('active');
+
+  fetch(`/api/chat/conversation/${currentConvId}/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score })
+  })
+  .then(res => {
+      if (!res.ok) throw new Error('Failed to submit feedback');
+  })
+  .catch(err => {
+      console.error('Feedback error:', err);
+      // Revert UI on failure
+      clickedBtn.classList.remove('active');
+  });
+}
+
+
+
+
+

@@ -92,7 +92,27 @@ function buildScanContextText() {
   return contextContent;
 }
 
+function getUniqueFileName(name) {
+  let uniqueName = name;
+  let counter = 1;
+  const existingNames = state.attachedFiles.map(f => f.name);
+
+  while (existingNames.includes(uniqueName)) {
+    const dotIndex = name.lastIndexOf('.');
+    if (dotIndex !== -1) {
+      const baseName = name.substring(0, dotIndex);
+      const extension = name.substring(dotIndex);
+      uniqueName = `${baseName} (${counter})${extension}`;
+    } else {
+      uniqueName = `${name} (${counter})`;
+    }
+    counter++;
+  }
+  return uniqueName;
+}
+
 export function addAttachment(fileObj) {
+  fileObj.name = getUniqueFileName(fileObj.name);
   state.attachedFiles.push(fileObj);
   updateAttachmentsPreview();
 }
@@ -121,12 +141,14 @@ export function updateAttachmentsPreview() {
     const name = escapeHtml(f?.name || 'attachment');
     const size = typeof f?.size === 'number' ? escapeHtml(formatFileSize(f.size)) : '';
     return `
-      <div class="attachment-pill" data-idx="${i}">
+      <div class="attachment-pill" data-idx="${i}" title="Click to preview">
         <span class="attachment-icon">${icon}</span>
         <span class="attachment-name" title="${name}">${name}</span>
         ${size ? `<span class="attachment-size">${size}</span>` : ``}
-        <button class="attachment-open" type="button" title="Preview">👁️</button>
-        <button class="attachment-remove" type="button" title="Remove">✕</button>
+        <div style="display: flex; gap: 4px; border-left: 1px solid rgba(0,0,0,0.1); padding-left: 8px; margin-left: 4px;">
+          <button class="attachment-open" type="button" title="Preview">👁️</button>
+          <button class="attachment-remove" type="button" title="Remove">✕</button>
+        </div>
       </div>
     `;
   }).join('');
@@ -150,8 +172,6 @@ export function initAttachments() {
   const attachFileOption = document.getElementById('attach-file-option');
   const attachScanOption = document.getElementById('attach-scan-option');
   const fileInput = document.getElementById('file-input');
-  const attachBrowsePodsOption = document.getElementById('attach-browse-pods-option');
-  const attachBrowseNodesOption = document.getElementById('attach-browse-nodes-option');
 
   attachBtn?.addEventListener('click', (e) => {
     e.stopPropagation();  //dai click pe ceva din meniu si nu ajunge clickul si la document
@@ -184,15 +204,7 @@ export function initAttachments() {
     });
   });
 
-  attachBrowsePodsOption?.addEventListener('click', () => {
-    toggleAttachDropdown(true);
-    openResourcePicker('pods');
-  });
 
-  attachBrowseNodesOption?.addEventListener('click', () => {
-    toggleAttachDropdown(true);
-    openResourcePicker('nodes');
-  });
 
   fileInput?.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files || []);

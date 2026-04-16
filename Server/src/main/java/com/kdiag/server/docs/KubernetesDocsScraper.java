@@ -34,11 +34,10 @@ public class KubernetesDocsScraper {
             "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/",
             "https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/",
             "https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/",
-            "https://kubernetes.io/docs/tasks/debug/debug-cluster/"
-    );
+            "https://kubernetes.io/docs/tasks/debug/debug-cluster/");
 
-    // Max chars to inject per request (keep prompt size sane)
-    private static final int MAX_CONTEXT_CHARS = 4000;
+    // Max chars to inject per request
+    private static final int MAX_CONTEXT_CHARS = 15000;
 
     public KubernetesDocsScraper(KubernetesDocPageRepository repository) {
         this.repository = repository;
@@ -53,7 +52,7 @@ public class KubernetesDocsScraper {
                 // Fetch standard english stopwords list from a reliable public source
                 String url = "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/stopwords.zip/stopwords/english";
                 String response = restTemplate.getForObject(url, String.class);
-                
+
                 if (response != null) {
                     Set<String> fetched = new HashSet<>();
                     for (String line : response.split("\n")) {
@@ -69,7 +68,8 @@ public class KubernetesDocsScraper {
                 logger.error("Failed to fetch stopwords from API, falling back to minimal list", e);
                 // Minimal fallback in case of no internet on boot
                 if (stopWords.isEmpty()) {
-                    stopWords = new HashSet<>(Arrays.asList("the", "and", "a", "an", "in", "on", "at", "to", "for", "of", "with"));
+                    stopWords = new HashSet<>(
+                            Arrays.asList("the", "and", "a", "an", "in", "on", "at", "to", "for", "of", "with"));
                 }
             }
         }
@@ -98,7 +98,7 @@ public class KubernetesDocsScraper {
                         title = "Kubernetes Documentation";
                     }
 
-                    KubernetesDocPage page = new KubernetesDocPage(url, title, truncate(text, 15000), false);
+                    KubernetesDocPage page = new KubernetesDocPage(url, title, truncate(text, 20000), false);
                     repository.save(page);
                 } catch (Exception e) {
                     logger.error("Failed to fetch static doc {}", url, e);
@@ -126,8 +126,7 @@ public class KubernetesDocsScraper {
     }
 
     /**
-     * Returns relevant documentation snippets for the given user message.
-     * Falls back to static snippet if DB is empty.
+     * Returns relevant documentation for the given user message.
      */
     public String getRelevantDocs(String userMessage) {
         List<KubernetesDocPage> allPages = repository.findAll();
@@ -136,19 +135,30 @@ public class KubernetesDocsScraper {
             return getFallbackSnippet();
         }
 
+        List<String> keywords = extractKeywords(userMessage);
         // Score pages by keyword relevance
-        List<KubernetesDocPage> ranked = rankPages(allPages, userMessage);
+        List<KubernetesDocPage> ranked = rankPages(allPages, keywords);
 
         // Build context string from top pages
         StringBuilder sb = new StringBuilder();
         sb.append("=== Relevant Kubernetes Documentation ===\n");
         int chars = 0;
         for (KubernetesDocPage p : ranked) {
-            String snippet = truncate(p.getTextContent(), 1200); // Send up to 1200 chars per page
-            String entry = "## " + p.getTitle() + "\n" + snippet + "\nSource: " + p.getUrl() + "\n\n";
+            String content = p.getTextContent();
+            if (content == null || content.isEmpty())
+                continue;
+
+            String entry = "## " + p.getTitle() + "\n" + content + "\nSource: " + p.getUrl() + "\n\n";
+
+            // If entry alone > limit, truncate it to avoid overflow
+            if (entry.length() > MAX_CONTEXT_CHARS) {
+                entry = entry.substring(0, MAX_CONTEXT_CHARS) + "...[document truncated due to length]\n\n";
+            }
+
             if (chars + entry.length() > MAX_CONTEXT_CHARS && chars > 0) {
                 break;
             }
+
             sb.append(entry);
             chars += entry.length();
         }
@@ -157,18 +167,11 @@ public class KubernetesDocsScraper {
         return sb.toString();
     }
 
-    /**
-     * Rank pages by keyword overlap with userMessage.
-     */
-    private List<KubernetesDocPage> rankPages(List<KubernetesDocPage> pages, String userMessage) {
-        if (userMessage == null || userMessage.isBlank()) {
-            return pages.subList(0, Math.min(3, pages.size()));
-        }
-
+    private List<String> extractKeywords(String text) {
+        if (text == null || text.isBlank())
+            return List.of();
         ensureStopwordsLoaded();
-
-        String lower = userMessage.toLowerCase();
-        // Extract keywords (words > 3 chars, skip stop words)
+        String lower = text.toLowerCase();
         String[] words = lower.split("[^a-zA-Z0-9àâîșțăÀÂÎȘȚĂ]+");
         List<String> keywords = new ArrayList<>();
         for (String w : words) {
@@ -176,11 +179,22 @@ public class KubernetesDocsScraper {
                 keywords.add(w);
             }
         }
+        return keywords;
+    }
+
+    /**
+     * Rank pages by keyword overlap with userMessage.
+     */
+    private List<KubernetesDocPage> rankPages(List<KubernetesDocPage> pages, List<String> keywords) {
+        if (keywords == null || keywords.isEmpty()) {
+            return pages.subList(0, Math.min(3, pages.size()));
+        }
 
         // Score each page
         List<Map.Entry<KubernetesDocPage, Integer>> scored = new ArrayList<>();
         for (KubernetesDocPage p : pages) {
-            String combined = ((p.getTitle() == null ? "" : p.getTitle()) + " " + (p.getTextContent() == null ? "" : p.getTextContent())).toLowerCase();
+            String combined = ((p.getTitle() == null ? "" : p.getTitle()) + " "
+                    + (p.getTextContent() == null ? "" : p.getTextContent())).toLowerCase();
             int score = 0;
             for (String kw : keywords) {
                 int idx = 0;
@@ -193,7 +207,8 @@ public class KubernetesDocsScraper {
             if (p.getTitle() != null) {
                 String titleLower = p.getTitle().toLowerCase();
                 for (String kw : keywords) {
-                    if (titleLower.contains(kw)) score += 5;
+                    if (titleLower.contains(kw))
+                        score += 5;
                 }
             }
             // Boost dynamic pages a little extra so they show up if searched
@@ -205,9 +220,9 @@ public class KubernetesDocsScraper {
 
         scored.sort((a, b) -> b.getValue() - a.getValue());
 
-        // Return top 4 pages
+        // Return top 3 pages
         List<KubernetesDocPage> result = new ArrayList<>();
-        for (int i = 0; i < Math.min(4, scored.size()); i++) {
+        for (int i = 0; i < Math.min(3, scored.size()); i++) {
             result.add(scored.get(i).getKey());
         }
         return result;
@@ -224,7 +239,8 @@ public class KubernetesDocsScraper {
     }
 
     private static String truncate(String s, int max) {
-        if (s == null) return "";
+        if (s == null)
+            return "";
         return s.length() <= max ? s : s.substring(0, max) + "...[truncated]";
     }
 

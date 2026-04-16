@@ -116,6 +116,13 @@ public class ChatService {
         return chatRepository.save(chat);
     }
 
+    public void updateFeedback(String conversationId, Integer score) {
+        chatRepository.findFirstByConversationIdOrderByCreatedAtDesc(conversationId).ifPresent(chat -> {
+            chat.setFeedback(score);
+            chatRepository.save(chat);
+        });
+    }
+
     // ── Conversation management ──
 
     public void ensureConversation(User user, String conversationId, String userMessage) {
@@ -289,6 +296,7 @@ public class ChatService {
             dto.put("userMessage", Objects.toString(c.getUserMessage(), ""));
             dto.put("aiResponse", Objects.toString(c.getAiResponse(), ""));
             dto.put("createdAt", c.getCreatedAt());
+            dto.put("feedback", c.getFeedback() != null ? c.getFeedback() : 0);
             dto.put("attachments", atts);
             dtos.add(dto);
         }

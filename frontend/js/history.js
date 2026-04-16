@@ -128,7 +128,7 @@ function renderConversationList(container, conversations) {
           if (atts.length) addUserMessageWithAttachments(um, atts, true);
           else addMessage(um, 'user');
         }
-        if (ar) addMessage(ar, 'assistant');
+        if (ar) addMessage(ar, 'assistant', x.feedback || 0);
       });
     }
 

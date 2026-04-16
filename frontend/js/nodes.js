@@ -1,6 +1,10 @@
 import { state } from './state.js';
-import { escapeHtml, prettyJson } from './utils.js';
 import { scanNodes, nodeDetails } from './api.js';
+import { 
+  escapeHtml, prettyJson, updateBulkUIComponent, syncCheckboxes, createHelperButton 
+} from './utils.js';
+import { addAttachment } from './attachments.js';
+import { switchToTab } from './navigation.js';
 
 function setActiveNodeTab(tab) {
   const buttons = Array.from(document.querySelectorAll('#node-details-modal .pod-tab-btn'));
@@ -62,6 +66,63 @@ export function initNodesScanner() {
   const nodesScanResults = document.getElementById('nodes-scan-results');
   const nodesScanLoading = document.getElementById('nodes-scan-loading');
   const nodesList = document.getElementById('nodes-list');
+  const bulkOptions = document.getElementById('nodes-bulk-options');
+  const selectAllCheckbox = document.getElementById('nodes-select-all');
+  const selectedCountEl = document.getElementById('nodes-selected-count');
+  const bulkAddBtn = document.getElementById('nodes-bulk-add-btn');
+  const selectMasterBtn = document.getElementById('nodes-select-master');
+  const selectWorkerBtn = document.getElementById('nodes-select-worker');
+
+  let selectedNodes = new Set(); // Stores node names
+
+  function updateUI() {
+    updateBulkUIComponent(
+      { bulkOptions, selectedCountEl, bulkAddBtn, selectAllCheckbox },
+      selectedNodes,
+      state.lastScannedNodes || []
+    );
+  }
+
+  selectAllCheckbox?.addEventListener('change', (e) => {
+    const checked = e.target.checked;
+    selectedNodes.clear();
+    if (checked) {
+      (state.lastScannedNodes || []).forEach(n => {
+        selectedNodes.add(n.name);
+      });
+    }
+    // Update all node checkboxes in the list
+    syncCheckboxes(nodesList, '.node-item-checkbox', 'data-node-name', selectedNodes);
+    updateUI();
+  });
+
+  const isMaster = (node) => {
+    const roles = (node.roles || '').toLowerCase();
+    return roles.includes('control-plane') || roles.includes('master');
+  };
+
+  selectMasterBtn?.addEventListener('click', () => {
+    selectedNodes.clear();
+    (state.lastScannedNodes || []).forEach(n => {
+      if (isMaster(n)) selectedNodes.add(n.name);
+    });
+    syncNodeCheckboxes();
+    updateUI();
+  });
+
+  selectWorkerBtn?.addEventListener('click', () => {
+    selectedNodes.clear();
+    (state.lastScannedNodes || []).forEach(n => {
+      if (!isMaster(n)) selectedNodes.add(n.name);
+    });
+    syncNodeCheckboxes();
+    updateUI();
+  });
+
+  function syncNodeCheckboxes() {
+    syncCheckboxes(nodesList, '.node-item-checkbox', 'data-node-name', selectedNodes);
+  }
+
 
   document.getElementById('node-details-close')?.addEventListener('click', closeNodeDetailsModal);
   document.getElementById('node-details-cancel')?.addEventListener('click', closeNodeDetailsModal);
@@ -82,6 +143,10 @@ export function initNodesScanner() {
     nodesScanResults.style.display = 'none';
     nodesList.innerHTML = '';
     state.lastScannedNodes = [];
+    selectedNodes.clear();
+    if (bulkOptions) bulkOptions.style.display = 'none';
+    if (selectAllCheckbox) selectAllCheckbox.checked = false;
+    updateUI();
 
     const { resp, data } = await scanNodes();
 
@@ -99,6 +164,8 @@ export function initNodesScanner() {
     const nodes = data?.nodes || [];
     state.lastScannedNodes = nodes;
 
+    if (bulkOptions && nodes.length > 0) bulkOptions.style.display = 'block';
+
     if (!nodes.length) {
       nodesList.innerHTML = '<p style="text-align:center;opacity:0.7;">No nodes found.</p>';
       scanNodesBtn.disabled = false;
@@ -109,16 +176,35 @@ export function initNodesScanner() {
     nodes.forEach(n => {
       const div = document.createElement('div');
       div.className = 'pod-item';
+      div.style.display = 'flex';
+      div.style.alignItems = 'flex-start';
+      div.style.gap = '1rem';
+
       div.innerHTML = `
-        <h4>🖥️ ${escapeHtml(n.name)}</h4>
-        <div class="pod-info">
-          <div class="pod-info-item"><span class="pod-info-label">Status:</span><span>${escapeHtml(n.status || 'N/A')}</span></div>
-          <div class="pod-info-item"><span class="pod-info-label">Roles:</span><span>${escapeHtml(n.roles || 'N/A')}</span></div>
-          <div class="pod-info-item"><span class="pod-info-label">Version:</span><span>${escapeHtml(n.version || 'N/A')}</span></div>
+        <input type="checkbox" class="node-item-checkbox" data-node-name="${escapeHtml(n.name)}" 
+               style="width: 18px; height: 18px; margin-top: 0.5rem; accent-color: var(--yellow-green); flex-shrink: 0;"
+               ${selectedNodes.has(n.name) ? 'checked' : ''}>
+        <div style="flex: 1;">
+          <h4>🖥️ ${escapeHtml(n.name)}</h4>
+          <div class="pod-info">
+            <div class="pod-info-item"><span class="pod-info-label">Status:</span><span>${escapeHtml(n.status || 'N/A')}</span></div>
+            <div class="pod-info-item"><span class="pod-info-label">Roles:</span><span>${escapeHtml(n.roles || 'N/A')}</span></div>
+            <div class="pod-info-item"><span class="pod-info-label">Version:</span><span>${escapeHtml(n.version || 'N/A')}</span></div>
+          </div>
+          <button class="btn-details" type="button" data-node-name="${escapeHtml(n.name)}">🔎 Details</button>
         </div>
-        <button class="btn-details" type="button" data-node-name="${escapeHtml(n.name)}">🔎 Details</button>
       `;
       nodesList.appendChild(div);
+
+      const cb = div.querySelector('.node-item-checkbox');
+      cb.addEventListener('change', (e) => {
+        if (e.target.checked) {
+          selectedNodes.add(n.name);
+        } else {
+          selectedNodes.delete(n.name);
+        }
+        updateBulkUI();
+      });
     });
 
     nodesList.querySelectorAll('button.btn-details').forEach(btn => {
@@ -144,6 +230,84 @@ export function initNodesScanner() {
 
     scanNodesBtn.disabled = false;
     scanNodesBtn.style.opacity = '1';
+  });
+
+
+
+  document.getElementById('node-details-add-context')?.addEventListener('click', () => {
+    if (!state.selectedNodeForDetails) return;
+    const node = state.selectedNodeForDetails;
+    const details = state.selectedNodeDetailsPayload;
+    const name = node.name || details?.name || 'unknown-node';
+
+    let text = `=== NODE DETAILS: ${name} ===\n`;
+    text += `Name: ${name}\nStatus: ${node.status || 'N/A'}\nRoles: ${node.roles || 'N/A'}\nVersion: ${node.version || 'N/A'}\nInternal IP: ${node.internalIp || 'N/A'}\nExternal IP: ${node.externalIp || 'N/A'}\n`;
+
+    if (details) {
+      if (details.describe) text += `\n--- kubectl describe ---\n${details.describe}\n`;
+      const nodeJson = details?.nodeJson || details?.node_json || null;
+      if (nodeJson) text += `\n--- kubectl get node -o json ---\n${prettyJson(nodeJson)}\n`;
+      if (details.events) text += `\n--- Events ---\n${details.events}\n`;
+    }
+
+    addAttachment({ name: `node-${name}.txt`, size: text.length, type: 'text/plain', content: text, _scanContext: true });
+    closeNodeDetailsModal();
+    switchToTab('home');
+  });
+
+  bulkAddBtn?.addEventListener('click', async () => {
+    if (selectedNodes.size === 0) return;
+
+    const levels = Array.from(document.querySelectorAll('.node-detail-level:checked')).map(cb => cb.value);
+    
+    bulkAddBtn.disabled = true;
+    bulkAddBtn.textContent = '⌛ Fetching details...';
+
+    const selectedNodeList = state.lastScannedNodes.filter(n => selectedNodes.has(n.name));
+    let aggregatedContext = `=== BULK NODE CONTEXT (${selectedNodeList.length} nodes) ===\n`;
+    aggregatedContext += `Detail levels: ${levels.join(', ') || 'Summary only'}\n\n`;
+
+    try {
+      for (const node of selectedNodeList) {
+        aggregatedContext += `--- NODE: ${node.name} ---\n`;
+        aggregatedContext += `Status: ${node.status} | Roles: ${node.roles || 'N/A'} | Version: ${node.version}\n`;
+        
+        if (levels.length > 0) {
+          const detailsResults = await Promise.all(levels.map(async lvl => {
+            const { resp, data } = await nodeDetails(node.name, lvl);
+            return { lvl, ok: resp.ok, data };
+          }));
+
+          detailsResults.forEach(res => {
+            if (res.ok) {
+              const payloadKey = res.lvl === 'json' ? 'nodeJson' : res.lvl;
+              let content = res.data[payloadKey];
+              if (res.lvl === 'json') content = prettyJson(content);
+              aggregatedContext += `[${res.lvl.toUpperCase()}]\n${content}\n`;
+            } else {
+              aggregatedContext += `[${res.lvl.toUpperCase()}] ERROR: Failed to fetch\n`;
+            }
+          });
+        }
+        aggregatedContext += '\n';
+      }
+
+      addAttachment({ 
+        name: `bulk-nodes-${selectedNodeList.length}.txt`, 
+        size: aggregatedContext.length, 
+        type: 'text/plain', 
+        content: aggregatedContext, 
+        _scanContext: true 
+      });
+      switchToTab('home');
+    } catch (err) {
+      console.error('Bulk fetch failed', err);
+      alert('Failed to fetch some node details. Check console.');
+    } finally {
+      bulkAddBtn.disabled = false;
+      updateUI();
+      bulkAddBtn.innerHTML = `<span>➕</span> Add context for <strong>${selectedNodes.size}</strong> selected nodes`;
+    }
   });
 }
 

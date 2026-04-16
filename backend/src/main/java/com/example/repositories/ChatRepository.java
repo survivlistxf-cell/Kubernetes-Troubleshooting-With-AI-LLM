@@ -19,5 +19,7 @@ public interface ChatRepository extends JpaRepository<Chat, Long> {
 
     List<Chat> findByConversationIdOrderByCreatedAtDesc(String conversationId);
 
+    java.util.Optional<Chat> findFirstByConversationIdOrderByCreatedAtDesc(String conversationId);
+
     void deleteByConversationId(String conversationId);
 }

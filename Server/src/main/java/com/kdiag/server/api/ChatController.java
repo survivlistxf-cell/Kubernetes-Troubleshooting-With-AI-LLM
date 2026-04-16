@@ -27,10 +27,24 @@ public class ChatController {
 
     private final AiEngine aiEngine;
     private final HistoryService historyService;
+    private final com.kdiag.server.repositories.ProblemResolutionRepository resolutionRepository;
 
-    public ChatController(AiEngine aiEngine, HistoryService historyService) {
+    public ChatController(AiEngine aiEngine, HistoryService historyService, com.kdiag.server.repositories.ProblemResolutionRepository resolutionRepository) {
         this.aiEngine = aiEngine;
         this.historyService = historyService;
+        this.resolutionRepository = resolutionRepository;
+    }
+
+    @PostMapping("/history/{conversationId}/feedback")
+    public void setFeedback(@PathVariable String conversationId, @RequestBody java.util.Map<String, Integer> payload) {
+        Integer score = payload.get("score");
+        if (score == null) return;
+        
+        resolutionRepository.findTopByConversationIdOrderByCreatedAtDesc(conversationId).ifPresent(res -> {
+            res.setFeedback(score);
+            resolutionRepository.save(res);
+            logger.info("Feedback set for conv {}: {}", conversationId, score);
+        });
     }
 
     @GetMapping("/history/list")
@@ -49,7 +63,8 @@ public class ChatController {
         if (req.getMessage() != null) {
             logger.info("Message: {}", req.getMessage().getText());
         }
-        logger.info("Received request: proto={} conv={} hasArtifacts={}", req.getProtocol_version(), req.getConversation_id(), (req.getArtifacts() != null && !req.getArtifacts().isEmpty()));
+        logger.info("Received request: proto={} conv={} hasArtifacts={}", req.getProtocol_version(),
+                req.getConversation_id(), (req.getArtifacts() != null && !req.getArtifacts().isEmpty()));
         if (!"kdiag/1.0".equalsIgnoreCase(req.getProtocol_version())) {
             throw new IllegalArgumentException("Unsupported protocol_version: " + req.getProtocol_version());
         }
@@ -100,15 +115,14 @@ public class ChatController {
             return null;
         }
 
-        return result.getActions().stream()
-            .<KdiagModels.ActionRequested>map(a -> {
-                KdiagModels.ActionRequested ar = new KdiagModels.ActionRequested();
-                ar.setId(a.getId());
-                ar.setType(a.getType());
-                ar.setCollector(a.getCollector());
-                ar.setSpec(a.getSpec());
-                ar.setWhy(a.getWhy());
-                return ar;
-            }).toList();
+        return result.getActions().stream().<KdiagModels.ActionRequested>map(a -> {
+            KdiagModels.ActionRequested ar = new KdiagModels.ActionRequested();
+            ar.setId(a.getId());
+            ar.setType(a.getType());
+            ar.setCollector(a.getCollector());
+            ar.setSpec(a.getSpec());
+            ar.setWhy(a.getWhy());
+            return ar;
+        }).toList();
     }
 }

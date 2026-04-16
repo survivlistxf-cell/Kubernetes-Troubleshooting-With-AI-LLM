@@ -32,7 +32,8 @@ public class AiEngine {
     private final KubernetesDynamicSearcher dynamicSearcher;
     private final com.kdiag.server.ai.history.HistoryService historyService;
 
-    public AiEngine(OllamaClient ollama, KubernetesDocsScraper docsScraper, KubernetesDynamicSearcher dynamicSearcher, com.kdiag.server.ai.history.HistoryService historyService) {
+    public AiEngine(OllamaClient ollama, KubernetesDocsScraper docsScraper, KubernetesDynamicSearcher dynamicSearcher,
+            com.kdiag.server.ai.history.HistoryService historyService) {
         this.ollama = ollama;
         this.docsScraper = docsScraper;
         this.dynamicSearcher = dynamicSearcher;
@@ -42,12 +43,15 @@ public class AiEngine {
     private void debugLog(String msg) {
         try {
             String line = LocalDateTime.now() + " " + msg + "\n";
-            Files.write(Paths.get("ai_debug.log"), line.getBytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        } catch (Exception ignored) {}
+            Files.write(Paths.get("ai_debug.log"), line.getBytes(), StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND);
+        } catch (Exception ignored) {
+        }
     }
 
     public AiResult solve(String conversationId, String userText, List<Artifact> artifacts) {
-        debugLog("[AiEngine] solve() convId=" + conversationId + " userText=" + userText + " artSize=" + (artifacts != null ? artifacts.size() : 0));
+        debugLog("[AiEngine] solve() convId=" + conversationId + " userText=" + userText + " artSize="
+                + (artifacts != null ? artifacts.size() : 0));
         // 1. Process and split artifacts (especially .txt files with multiple sections)
         List<Artifact> processedArtifacts = processArtifacts(artifacts);
 
@@ -60,19 +64,22 @@ public class AiEngine {
         // 4. Update history with user message
         if (conversationId != null) {
             debugLog("[AiEngine] Adding user turn to history for " + conversationId);
-            historyService.addEntry(conversationId, "user", userContent);
+            historyService.addEntry(conversationId, "user", userContent); // memorie pe termen scurt (cache backend)
         }
 
         // 5. Build full message list for Ollama
         List<Map<String, String>> messages = new java.util.ArrayList<>();
         String systemPrompt = buildSystemPrompt(relevantDocs);
         messages.add(Map.of("role", "system", "content", systemPrompt));
-        
+
         if (conversationId != null) {
-            List<com.kdiag.server.ai.history.HistoryService.HistoryEntry> historyEntries = historyService.getHistory(conversationId);
+            List<com.kdiag.server.ai.history.HistoryService.HistoryEntry> historyEntries = historyService
+                    .getHistory(conversationId); // extragem toate mesajele anterioare din cache
             debugLog("[AiEngine] History for [" + conversationId + "] has " + historyEntries.size() + " entries.");
             historyEntries.forEach(entry -> {
-                debugLog("[AiEngine]   - " + entry.role() + ": " + (entry.content().length() > 50 ? entry.content().substring(0, 50).replace("\n", " ") + "..." : entry.content()));
+                debugLog("[AiEngine]   - " + entry.role() + ": "
+                        + (entry.content().length() > 50 ? entry.content().substring(0, 50).replace("\n", " ") + "..."
+                                : entry.content()));
                 messages.add(Map.of("role", entry.role(), "content", entry.content()));
             });
         } else {
@@ -100,14 +107,16 @@ public class AiEngine {
             if (endIdx != -1) {
                 String query = assistantText.substring(startIdx, endIdx).trim();
                 logger.info("LLM requested dynamic search for: {}", query);
-                
+
                 String dynamicDocsText = dynamicSearcher.searchAndSave(conversationId, query);
-                
+
                 if (!dynamicDocsText.isBlank()) {
                     // Update context and query again
                     messages.add(Map.of("role", "assistant", "content", assistantText));
-                    messages.add(Map.of("role", "user", "content", "Here is additional documentation from Kubernetes website based on your search:\n\n" + dynamicDocsText + "\n\nPlease solve the user's issue now."));
-                    
+                    messages.add(Map.of("role", "user", "content",
+                            "Here is additional documentation from Kubernetes website based on your search:\n\n"
+                                    + dynamicDocsText + "\n\nPlease solve the user's issue now."));
+
                     try {
                         logger.info("Sending secondary request to Ollama with dynamic docs context...");
                         assistantText = ollama.chat(messages).trim();
@@ -117,10 +126,12 @@ public class AiEngine {
                 } else {
                     logger.info("Dynamic search found nothing. Asking LLM to continue without it.");
                     messages.add(Map.of("role", "assistant", "content", assistantText));
-                    messages.add(Map.of("role", "user", "content", "Search yielded no new results. Please provide your best diagnosis or advice."));
+                    messages.add(Map.of("role", "user", "content",
+                            "Search yielded no new results. Please provide your best diagnosis or advice."));
                     try {
                         assistantText = ollama.chat(messages).trim();
-                    } catch (Exception e) {}
+                    } catch (Exception e) {
+                    }
                 }
             }
         }
@@ -135,7 +146,8 @@ public class AiEngine {
     }
 
     private List<Artifact> processArtifacts(List<Artifact> artifacts) {
-        if (artifacts == null) return List.of();
+        if (artifacts == null)
+            return List.of();
         List<Artifact> result = new java.util.ArrayList<>();
         for (Artifact a : artifacts) {
             if (a.getContent() != null && a.getContent().contains("--- kubectl")) {
@@ -150,12 +162,14 @@ public class AiEngine {
     private List<Artifact> splitStructuredContent(Artifact original) {
         List<Artifact> parts = new java.util.ArrayList<>();
         String content = original.getContent();
-        
-        // Simple regex split based on Common patterns like --- kubectl describe --- or --- Logs ---
+
+        // Simple regex split based on Common patterns like --- kubectl describe --- or
+        // --- Logs ---
         String[] sections = content.split("(?m)^--- ");
         for (String section : sections) {
-            if (section.isBlank()) continue;
-            
+            if (section.isBlank())
+                continue;
+
             Artifact p = new Artifact();
             if (section.toLowerCase().startsWith("kubectl describe")) {
                 p.setType("pod_describe");
@@ -183,6 +197,8 @@ public class AiEngine {
                     if (a != null && a.getType() != null) {
                         query.append(" ").append(a.getType());
                     }
+                    // creeaza un sir lung de text (max 200 caractere) in care pune cuvinte cheie
+                    // din fiecare fisier atasat + user text
                     if (a != null && a.getContent() != null) {
                         String snippet = a.getContent().length() > 200
                                 ? a.getContent().substring(0, 200)
@@ -205,10 +221,12 @@ public class AiEngine {
         sb.append("Be direct and helpful.\n\n");
 
         sb.append("IMPORTANT ACTIONS:\n");
-        sb.append("- If user asks to 'stop commands', 'no commands', or 'without commands': analyze only, suggest NO kubectl commands\n");
+        sb.append(
+                "- If user asks to 'stop commands', 'no commands', or 'without commands': analyze only, suggest NO kubectl commands\n");
         sb.append("- If user provides error messages or logs: explain what they mean\n");
         sb.append("- Focus on understanding the problem first, not just solutions\n");
-        sb.append("- DYNAMIC SEARCH: If the current documentation context does not contain enough information to solve a complex or obscure issue, DO NOT invent a solution. Instead, output EXACTLY this string and nothing else: `[NEEDS_SEARCH: <query>]` where `<query>` is the short, exact term you want to search on kubernetes.io (e.g. `[NEEDS_SEARCH: nginx ingress 403 error]`). I will fetch the internet for you and return the documents.\n\n");
+        sb.append(
+                "- DYNAMIC SEARCH: If the current documentation context does not contain enough information to solve a complex or obscure issue, DO NOT invent a solution. Instead, output EXACTLY this string and nothing else: `[NEEDS_SEARCH: <query>]` where `<query>` is the short, exact term you want to search on kubernetes.io (e.g. `[NEEDS_SEARCH: nginx ingress 403 error]`). I will fetch the internet for you and return the documents.\n\n");
 
         if (relevantDocs != null && !relevantDocs.isBlank()) {
             sb.append("Official Kubernetes docs (from cache):\n");
@@ -318,11 +336,6 @@ public class AiEngine {
             return s;
         return s.substring(0, max) + "\n...[truncated (limit 10k)]";
     }
-
-    private static String nullToEmpty(String s) {
-        return s == null ? "" : s;
-    }
-
 
     public static class AiResult {
         private final String assistantText;

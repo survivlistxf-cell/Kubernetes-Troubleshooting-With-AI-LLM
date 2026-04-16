@@ -17,7 +17,8 @@ public class AiForwardingService {
 
     private static final Logger logger = LoggerFactory.getLogger(AiForwardingService.class);
 
-    public record ForwardResult(String text, String conversationId) {}
+    public record ForwardResult(String text, String conversationId) {
+    }
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -141,6 +142,16 @@ public class AiForwardingService {
         return response != null && response.startsWith("__AI_HTTP_ERROR__");
     }
 
+    public void submitFeedback(String conversationId, Integer score) {
+        try {
+            String url = aiServerBaseUrl + "/v1/history/" + conversationId + "/feedback";
+            restTemplate.postForEntity(url, Map.of("score", score), Void.class);
+            logger.info("Forwarded feedback for {} -> {}", conversationId, score);
+        } catch (Exception e) {
+            logger.error("Failed to forward feedback for {}", conversationId, e);
+        }
+    }
+
     public String extractHttpErrorCode(String response) {
         return response.substring("__AI_HTTP_ERROR__".length());
     }
@@ -163,7 +174,7 @@ public class AiForwardingService {
         }
         if (!(attachmentsObj instanceof List<?> list) || list.isEmpty())
             return List.of();
-        
+
         logger.info("[{}] processIncomingAttachments: found {} items", requestId, list.size());
         try {
             List<Map<String, Object>> artifacts = new ArrayList<>();
@@ -203,7 +214,8 @@ public class AiForwardingService {
     }
 
     private String enrichArtifactContent(String content) {
-        if (content == null || content.isBlank()) return content;
+        if (content == null || content.isBlank())
+            return content;
 
         // Pattern for Pod: === POD DETAILS: namespace/name ===
         Pattern podPattern = Pattern.compile("=== POD DETAILS: ([^/]+)/([^\\s]+) ===");
@@ -212,14 +224,18 @@ public class AiForwardingService {
             String ns = podMatcher.group(1);
             String name = podMatcher.group(2);
 
-            content = content.replace("--- kubectl describe ---", 
-                "--- kubectl describe pod " + name + " -n " + ns + " ---\n# kubectl describe pod " + name + " -n " + ns);
-            content = content.replace("--- kubectl get pod -o json ---", 
-                "--- kubectl get pod " + name + " -n " + ns + " -o json ---\n# kubectl get pod " + name + " -n " + ns + " -o json");
-            content = content.replace("--- Logs (tail 200) ---", 
-                "--- kubectl logs " + name + " -n " + ns + " --tail=200 ---\n# kubectl logs " + name + " -n " + ns + " --tail=200");
-            content = content.replace("--- Events ---", 
-                "--- kubectl get events -n " + ns + " --field-selector involvedObject.name=" + name + " ---\n# kubectl get events -n " + ns + " --field-selector involvedObject.name=" + name);
+            content = content.replace("--- kubectl describe ---",
+                    "--- kubectl describe pod " + name + " -n " + ns + " ---\n# kubectl describe pod " + name + " -n "
+                            + ns);
+            content = content.replace("--- kubectl get pod -o json ---",
+                    "--- kubectl get pod " + name + " -n " + ns + " -o json ---\n# kubectl get pod " + name + " -n "
+                            + ns + " -o json");
+            content = content.replace("--- Logs (tail 200) ---",
+                    "--- kubectl logs " + name + " -n " + ns + " --tail=200 ---\n# kubectl logs " + name + " -n " + ns
+                            + " --tail=200");
+            content = content.replace("--- Events ---",
+                    "--- kubectl get events -n " + ns + " --field-selector involvedObject.name=" + name
+                            + " ---\n# kubectl get events -n " + ns + " --field-selector involvedObject.name=" + name);
         }
 
         // Pattern for Node: === NODE DETAILS: name ===
@@ -228,12 +244,13 @@ public class AiForwardingService {
         if (nodeMatcher.find()) {
             String name = nodeMatcher.group(1);
 
-            content = content.replace("--- kubectl describe ---", 
-                "--- kubectl describe node " + name + " ---\n# kubectl describe node " + name);
-            content = content.replace("--- kubectl get node -o json ---", 
-                "--- kubectl get node " + name + " -o json ---\n# kubectl get node " + name + " -o json");
-            content = content.replace("--- Events ---", 
-                "--- kubectl get events --field-selector involvedObject.name=" + name + " ---\n# kubectl get events --field-selector involvedObject.name=" + name);
+            content = content.replace("--- kubectl describe ---",
+                    "--- kubectl describe node " + name + " ---\n# kubectl describe node " + name);
+            content = content.replace("--- kubectl get node -o json ---",
+                    "--- kubectl get node " + name + " -o json ---\n# kubectl get node " + name + " -o json");
+            content = content.replace("--- Events ---",
+                    "--- kubectl get events --field-selector involvedObject.name=" + name
+                            + " ---\n# kubectl get events --field-selector involvedObject.name=" + name);
         }
 
         return content;

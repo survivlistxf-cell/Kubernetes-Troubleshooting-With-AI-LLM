@@ -23,6 +23,9 @@ public class ProblemResolution {
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
+    @Column
+    private Integer feedback = 0; // 0 = none, 1 = like, -1 = dislike
+
     public ProblemResolution() {
     }
 
@@ -67,5 +70,13 @@ public class ProblemResolution {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Integer getFeedback() {
+        return feedback;
+    }
+
+    public void setFeedback(Integer feedback) {
+        this.feedback = feedback;
     }
 }

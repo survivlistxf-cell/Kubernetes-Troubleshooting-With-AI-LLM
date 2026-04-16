@@ -9,4 +9,5 @@ import java.util.List;
 @Repository
 public interface ProblemResolutionRepository extends JpaRepository<ProblemResolution, Long> {
     List<ProblemResolution> findByConversationId(String conversationId);
+    java.util.Optional<ProblemResolution> findTopByConversationIdOrderByCreatedAtDesc(String conversationId);
 }

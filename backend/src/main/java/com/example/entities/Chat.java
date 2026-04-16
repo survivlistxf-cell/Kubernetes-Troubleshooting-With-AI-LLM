@@ -35,6 +35,9 @@ public class Chat {
     @Column(name = "created_at")
     private java.time.LocalDateTime createdAt;
 
+    @Column
+    private Integer feedback = 0; // 0 = none, 1 = like, -1 = dislike
+
     @PrePersist
     protected void onCreate() {
         this.createdAt = java.time.LocalDateTime.now();
@@ -65,6 +68,10 @@ public class Chat {
         return conversationId;
     }
 
+    public Integer getFeedback() {
+        return feedback;
+    }
+
     // Setters
     public void setId(Long id) {
         this.id = id;
@@ -88,6 +95,10 @@ public class Chat {
 
     public void setConversationId(String conversationId) {
         this.conversationId = conversationId;
+    }
+
+    public void setFeedback(Integer feedback) {
+        this.feedback = feedback;
     }
 
 }

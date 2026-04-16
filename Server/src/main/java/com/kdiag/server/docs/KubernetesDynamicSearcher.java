@@ -92,7 +92,7 @@ public class KubernetesDynamicSearcher {
         Optional<KubernetesDocPage> existing = docRepository.findByUrl(url);
         if (existing.isPresent()) {
             logger.info("URL already in DB: {}", url);
-            return truncate(existing.get().getTextContent(), 1500);
+            return truncate(existing.get().getTextContent(), 15000);
         }
 
         try {
@@ -120,10 +120,10 @@ public class KubernetesDynamicSearcher {
             String title = doc.title();
             if (title == null || title.isBlank()) title = "Discovered Kubernetes Doc";
 
-            KubernetesDocPage page = new KubernetesDocPage(url, title, truncate(content, 15000), true);
+            KubernetesDocPage page = new KubernetesDocPage(url, title, truncate(content, 20000), true);
             docRepository.save(page);
 
-            return truncate(content, 1500);
+            return truncate(content, 15000);
         } catch (Exception e) {
             logger.error("Failed to fetch {}", url, e);
             return "";

@@ -93,20 +93,6 @@
                                                 results</span>
                                         </div>
                                     </button>
-                                    <button type="button" class="attach-dropdown-item" id="attach-browse-pods-option">
-                                        <span class="attach-dropdown-icon">📦</span>
-                                        <div class="attach-dropdown-text">
-                                            <span class="attach-dropdown-label">Browse Pods</span>
-                                            <span class="attach-dropdown-desc">Pick specific pods to attach</span>
-                                        </div>
-                                    </button>
-                                    <button type="button" class="attach-dropdown-item" id="attach-browse-nodes-option">
-                                        <span class="attach-dropdown-icon">🖥️</span>
-                                        <div class="attach-dropdown-text">
-                                            <span class="attach-dropdown-label">Browse Nodes</span>
-                                            <span class="attach-dropdown-desc">Pick specific nodes to attach</span>
-                                        </div>
-                                    </button>
                                 </div>
                             </div>
                             <input type="file" id="file-input" style="display: none;" multiple
@@ -129,13 +115,13 @@
                 <div class="chat-history">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <h2>💬 Chat History</h2>
-                        <button id="chat-history-enter-select-mode" class="btn-primary" style="padding:0.4rem 0.8rem; font-size:0.85rem; display:none;">Select</button>
+                        <button id="chat-history-enter-select-mode" class="btn-history-action" style="display:none;">Select</button>
                     </div>
-                    <div id="chat-history-toolbar" style="display:none; justify-content:space-between; align-items:center; margin-top: 1rem; background: rgba(0,0,0,0.2); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+                    <div id="chat-history-toolbar" class="history-toolbar" style="display:none;">
                         <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; color:var(--frosted-mint); font-size: 0.9rem;">
                             <input type="checkbox" id="chat-history-select-all" style="width: 1rem; height: 1rem;" /> Select all
                         </label>
-                        <button type="button" id="chat-history-delete-selected" class="btn-danger" style="padding:0.4rem 0.8rem; font-size:0.85rem;" disabled>Delete selected (0)</button>
+                        <button type="button" id="chat-history-delete-selected" class="btn-history-danger" disabled>Delete selected (0)</button>
                     </div>
                     <div id="chat-history-content" style="margin-top: 1rem;">
                         <p style="text-align: center; opacity: 0.7; margin-top: 2rem;">No conversations yet</p>
@@ -160,8 +146,36 @@
                     </div>
 
                     <button id="scan-btn" class="btn-scan">🔍 Scan for Pods</button>
-                    <button id="pods-add-to-chat-btn" class="btn-scan" style="display: none; margin-left: 0.5rem;">➕ Add
-                        pods context to chat</button>
+
+                    <div id="pods-bulk-options" class="bulk-toolbar" style="display: none;">
+                        <div class="bulk-toolbar-row">
+                            <label class="bulk-toolbar-label">
+                                <input type="checkbox" id="pods-select-all" style="width: 18px; height: 18px; accent-color: var(--yellow-green);"> Select All
+                            </label>
+                            <div id="pods-dynamic-helpers" class="bulk-toolbar-group">
+                                <!-- Dynamic buttons will be injected here -->
+                            </div>
+                            <span class="bulk-toolbar-separator">|</span>
+                            <span style="font-weight: 700; color: var(--pitch-black);">Detail level:</span>
+                            <div class="bulk-toolbar-group">
+                                <label class="bulk-toolbar-label" style="font-weight: normal; font-size: 0.95rem;">
+                                    <input type="checkbox" class="pod-detail-level" value="describe" checked style="accent-color: var(--yellow-green);"> Describe
+                                </label>
+                                <label class="bulk-toolbar-label" style="font-weight: normal; font-size: 0.95rem;">
+                                    <input type="checkbox" class="pod-detail-level" value="json" style="accent-color: var(--yellow-green);"> JSON
+                                </label>
+                                <label class="bulk-toolbar-label" style="font-weight: normal; font-size: 0.95rem;">
+                                    <input type="checkbox" class="pod-detail-level" value="events" style="accent-color: var(--yellow-green);"> Events
+                                </label>
+                                <label class="bulk-toolbar-label" style="font-weight: normal; font-size: 0.95rem;">
+                                    <input type="checkbox" class="pod-detail-level" value="logs" style="accent-color: var(--yellow-green);"> Logs
+                                </label>
+                            </div>
+                        </div>
+                        <button id="pods-bulk-add-btn" class="btn-primary" style="font-size: 0.95rem; padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>➕</span> Add context for <strong id="pods-selected-count">0</strong> selected pods
+                        </button>
+                    </div>
 
                     <div id="scan-results" class="scan-results" style="display: none;">
                         <h3>Scan Results:</h3>
@@ -183,6 +197,32 @@
                     <p>View all nodes in your Kubernetes cluster</p>
 
                     <button id="scan-nodes-btn" class="btn-scan">🔍 Scan for Nodes</button>
+
+                    <div id="nodes-bulk-options" class="bulk-toolbar" style="display: none;">
+                        <div class="bulk-toolbar-row">
+                            <label class="bulk-toolbar-label">
+                                <input type="checkbox" id="nodes-select-all" style="width: 18px; height: 18px; accent-color: var(--yellow-green);"> Select All
+                            </label>
+                            <button id="nodes-select-master" class="btn-helper">Select Master</button>
+                            <button id="nodes-select-worker" class="btn-helper">Select Worker</button>
+                            <span class="bulk-toolbar-separator">|</span>
+                            <span style="font-weight: 700; color: var(--pitch-black);">Detail level:</span>
+                            <div class="bulk-toolbar-group">
+                                <label class="bulk-toolbar-label" style="font-weight: normal; font-size: 0.95rem;">
+                                    <input type="checkbox" class="node-detail-level" value="describe" checked style="accent-color: var(--yellow-green);"> Describe
+                                </label>
+                                <label class="bulk-toolbar-label" style="font-weight: normal; font-size: 0.95rem;">
+                                    <input type="checkbox" class="node-detail-level" value="json" style="accent-color: var(--yellow-green);"> JSON
+                                </label>
+                                <label class="bulk-toolbar-label" style="font-weight: normal; font-size: 0.95rem;">
+                                    <input type="checkbox" class="node-detail-level" value="events" style="accent-color: var(--yellow-green);"> Events
+                                </label>
+                            </div>
+                        </div>
+                        <button id="nodes-bulk-add-btn" class="btn-primary" style="font-size: 0.95rem; padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>➕</span> Add context for <strong id="nodes-selected-count">0</strong> selected nodes
+                        </button>
+                    </div>
 
                     <div id="nodes-scan-results" class="scan-results" style="display: none;">
                         <h3>Scan Results:</h3>
@@ -296,6 +336,8 @@
                 </div>
 
                 <div style="display:flex; justify-content:center; gap:0.75rem;">
+                    <button id="node-details-add-context" type="button" class="btn-primary">➕ Add context to
+                        chat</button>
                     <button id="node-details-cancel" type="button" class="btn-secondary">Close</button>
                 </div>
             </div>

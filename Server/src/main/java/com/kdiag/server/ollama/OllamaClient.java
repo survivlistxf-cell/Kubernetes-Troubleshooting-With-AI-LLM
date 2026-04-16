@@ -49,13 +49,13 @@ public class OllamaClient {
         try {
             // Trim individual message content for cleaner logs
             List<Map<String, String>> logMessages = messages.stream()
-                .map(m -> Map.of(
-                    "role", m.getOrDefault("role", "unknown"),
-                    "content", truncate(m.getOrDefault("content", ""), 100)
-                ))
-                .toList();
+                    .map(m -> Map.of(
+                            "role", m.getOrDefault("role", "unknown"),
+                            "content", truncate(m.getOrDefault("content", ""), 100)))
+                    .toList();
             logger.info("Request: model={} messages={}", model, logMessages);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         OllamaChatResponse resp = webClient.post()
                 .uri("/v1/chat/completions")
@@ -92,8 +92,10 @@ public class OllamaClient {
     }
 
     private String truncate(String s, int max) {
-        if (s == null) return "";
-        if (s.length() <= max) return s;
+        if (s == null)
+            return "";
+        if (s.length() <= max)
+            return s;
         return s.substring(0, max) + "...";
     }
 }

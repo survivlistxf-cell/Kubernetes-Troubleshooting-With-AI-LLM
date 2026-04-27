@@ -1,5 +1,7 @@
 package com.example.controllers;
 
+import com.example.entities.ClusterConfig;
+import com.example.repositories.ClusterConfigRepository;
 import com.example.services.KubectlService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -13,15 +15,43 @@ import java.util.*;
 public class PodsController {
 
     private final KubectlService kubectl;
+    private final ClusterConfigRepository clusterRepo;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public PodsController(KubectlService kubectl) {
+    public PodsController(KubectlService kubectl, ClusterConfigRepository clusterRepo) {
         this.kubectl = kubectl;
+        this.clusterRepo = clusterRepo;
+    }
+
+    /**
+     * Resolve kubeconfig path: if clusterId is given, use that cluster's config;
+     * otherwise fall back to default behavior.
+     */
+    private String resolveKubeconfig(Long clusterId) {
+        if (clusterId != null) {
+            Optional<ClusterConfig> opt = clusterRepo.findById(clusterId);
+            if (opt.isPresent()) {
+                return kubectl.resolveKubeconfigForCluster(opt.get());
+            }
+        }
+        return kubectl.resolveKubeconfigPath();
+    }
+
+    /** Build kubectl prefix args for a cluster, or default */
+    private List<String> kubectlBase(Long clusterId) {
+        if (clusterId != null) {
+            Optional<ClusterConfig> opt = clusterRepo.findById(clusterId);
+            if (opt.isPresent()) {
+                return kubectl.buildKubectlPrefix(opt.get());
+            }
+        }
+        return new ArrayList<>(Arrays.asList("kubectl", "--kubeconfig", kubectl.resolveKubeconfigPath()));
     }
 
     @GetMapping("/scan-pods")
     public Map<String, Object> scanPods(
-            @RequestParam(name = "namespace", required = false, defaultValue = "default") String namespace) {
+            @RequestParam(name = "namespace", required = false, defaultValue = "default") String namespace,
+            @RequestParam(name = "clusterId", required = false) Long clusterId) {
         Map<String, Object> result = new HashMap<>();
         List<Map<String, String>> pods = new ArrayList<>();
 
@@ -33,14 +63,8 @@ public class PodsController {
                 return result;
             }
 
-            String kubeconfigPath = kubectl.resolveKubeconfigPath();
-
-            List<String> command = Arrays.asList(
-                    "kubectl",
-                    "--kubeconfig", kubeconfigPath,
-                    "get", "pods",
-                    "-n", namespace,
-                    "-o", "wide");
+            List<String> command = new ArrayList<>(kubectlBase(clusterId));
+            command.addAll(Arrays.asList("get", "pods", "-n", namespace, "-o", "wide"));
             String output = kubectl.executeCommandWithTimeout(command, 10);
 
             if (output == null || output.isEmpty()) {
@@ -153,7 +177,8 @@ public class PodsController {
     public Map<String, Object> podDetails(
             @RequestParam(name = "namespace", required = false, defaultValue = "default") String namespace,
             @RequestParam(name = "name") String name,
-            @RequestParam(name = "type", required = false) String type) {
+            @RequestParam(name = "type", required = false) String type,
+            @RequestParam(name = "clusterId", required = false) Long clusterId) {
         Map<String, Object> result = new HashMap<>();
 
         if (name == null || name.isBlank()) {
@@ -169,7 +194,6 @@ public class PodsController {
                 return result;
             }
 
-            String kubeconfigPath = kubectl.resolveKubeconfigPath();
             result.put("success", true);
             result.put("namespace", namespace);
             result.put("name", name);
@@ -178,14 +202,14 @@ public class PodsController {
             boolean fetchAll = (type == null || type.isBlank());
 
             if (fetchAll || "describe".equalsIgnoreCase(type)) {
-                List<String> cmd = List.of("kubectl", "--kubeconfig", kubeconfigPath, "describe", "pod", name, "-n",
-                        namespace);
+                List<String> cmd = new ArrayList<>(kubectlBase(clusterId));
+                cmd.addAll(List.of("describe", "pod", name, "-n", namespace));
                 result.put("describe", kubectl.executeWithResult(cmd, 15).output);
             }
 
             if (fetchAll || "json".equalsIgnoreCase(type)) {
-                List<String> cmd = List.of("kubectl", "--kubeconfig", kubeconfigPath, "get", "pod", name, "-n",
-                        namespace, "-o", "json");
+                List<String> cmd = new ArrayList<>(kubectlBase(clusterId));
+                cmd.addAll(List.of("get", "pod", name, "-n", namespace, "-o", "json"));
                 String jsonOut = kubectl.executeWithResult(cmd, 15).output;
                 try {
                     result.put("podJson", objectMapper.readValue(jsonOut, new TypeReference<Map<String, Object>>() {
@@ -197,14 +221,14 @@ public class PodsController {
 
             if (fetchAll || "events".equalsIgnoreCase(type)) {
                 String fieldSelector = "involvedObject.name=" + name;
-                List<String> cmd = List.of("kubectl", "--kubeconfig", kubeconfigPath, "get", "events", "-n", namespace,
-                        "--field-selector", fieldSelector, "-o", "wide");
+                List<String> cmd = new ArrayList<>(kubectlBase(clusterId));
+                cmd.addAll(List.of("get", "events", "-n", namespace, "--field-selector", fieldSelector, "-o", "wide"));
                 result.put("events", kubectl.executeWithResult(cmd, 15).output);
             }
 
             if (fetchAll || "logs".equalsIgnoreCase(type)) {
-                List<String> cmd = List.of("kubectl", "--kubeconfig", kubeconfigPath, "logs", name, "-n", namespace,
-                        "--tail=200");
+                List<String> cmd = new ArrayList<>(kubectlBase(clusterId));
+                cmd.addAll(List.of("logs", name, "-n", namespace, "--tail=200"));
                 result.put("logs", kubectl.executeWithResult(cmd, 15).output);
             }
 

@@ -5,6 +5,7 @@ import {
 } from './utils.js';
 import { addAttachment } from './attachments.js';
 import { switchToTab } from './navigation.js';
+import { getSelectedClusterId } from './clusters.js';
 
 function setActivePodTab(tab) {
   const buttons = Array.from(document.querySelectorAll('#pod-details-modal .pod-tab-btn'));
@@ -116,6 +117,8 @@ export function initPodsScanner() {
   scanBtn?.addEventListener('click', async () => {
     const namespaceInput = document.getElementById('namespace-input');
     const namespace = (namespaceInput?.value || 'default').trim() || 'default';
+    const clusterSelect = document.getElementById('pods-cluster-select');
+    const clusterId = getSelectedClusterId(clusterSelect);
 
     scanBtn.disabled = true;
     scanBtn.style.opacity = '0.6';
@@ -123,13 +126,14 @@ export function initPodsScanner() {
     scanResults.style.display = 'none';
     podsList.innerHTML = '';
     state.lastScannedPods = [];
+    state.activeClusterId = clusterId;
     selectedPods.clear();
     if (bulkOptions) bulkOptions.style.display = 'none';
     if (selectAllCheckbox) selectAllCheckbox.checked = false;
     if (dynamicHelpersEl) dynamicHelpersEl.innerHTML = '';
     updateUI();
 
-    const { resp, data } = await scanPods(namespace);
+    const { resp, data } = await scanPods(namespace, clusterId);
 
     scanLoading.style.display = 'none';
     scanResults.style.display = 'block';
@@ -262,7 +266,7 @@ export function initPodsScanner() {
         
         if (levels.length > 0) {
           const detailsResults = await Promise.all(levels.map(async lvl => {
-            const { resp, data } = await podDetails(pod.namespace, pod.name, lvl);
+            const { resp, data } = await podDetails(pod.namespace, pod.name, lvl, state.activeClusterId);
             return { lvl, ok: resp.ok, data };
           }));
 
@@ -383,7 +387,7 @@ async function loadPodTabDetails(tab) {
   const el = document.getElementById(`pod-details-${tab}`);
   if (el) el.textContent = 'Loading...';
 
-  const { resp, data } = await podDetails(ns, name, tab);
+  const { resp, data } = await podDetails(ns, name, tab, state.activeClusterId);
   if (resp.ok) {
     if (!state.selectedPodDetailsPayload) state.selectedPodDetailsPayload = {};
     state.selectedPodDetailsPayload[payloadKey] = data[payloadKey];

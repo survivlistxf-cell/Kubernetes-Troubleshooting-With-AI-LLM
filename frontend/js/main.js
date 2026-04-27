@@ -6,6 +6,7 @@ import { initChat } from './chat.js';
 import { initPodsScanner } from './pods.js';
 import { initNodesScanner } from './nodes.js';
 import { initAuth } from './auth.js';
+import { initClusterManager } from './clusters.js';
 
 document.addEventListener('DOMContentLoaded', () => {
   initAuth();
@@ -16,4 +17,5 @@ document.addEventListener('DOMContentLoaded', () => {
   initChat();
   initPodsScanner();
   initNodesScanner();
+  initClusterManager();
 });

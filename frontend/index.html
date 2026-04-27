@@ -135,14 +135,20 @@
                     <h2>📦 Kubernetes Pods Scanner</h2>
                     <p>Scan your system for running Kubernetes pods</p>
 
-                    <div
-                        style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
-                        <label for="namespace-input"
-                            style="color: var(--pitch-black); font-weight: 600;">Namespace:</label>
-                        <input type="text" id="namespace-input" placeholder="e.g. default, kube-system" value="default"
-                            style="padding: 0.65rem 1rem; border: 2px solid var(--ash-grey); border-radius: 0.5rem; font-size: 0.95rem; background-color: var(--frosted-mint); color: var(--pitch-black); min-width: 200px; transition: border-color 0.2s;"
-                            onfocus="this.style.borderColor='var(--yellow-green)'"
-                            onblur="this.style.borderColor='var(--ash-grey)'" />
+                    <div class="cluster-namespace-row">
+                        <div class="cluster-selector-group">
+                            <label for="pods-cluster-select" style="color: var(--pitch-black); font-weight: 600;">Cluster:</label>
+                            <select id="pods-cluster-select" class="cluster-selector cluster-select-input">
+                                <option value="">— Loading clusters... —</option>
+                            </select>
+                        </div>
+                        <div class="cluster-selector-group">
+                            <label for="namespace-input" style="color: var(--pitch-black); font-weight: 600;">Namespace:</label>
+                            <input type="text" id="namespace-input" placeholder="e.g. default, kube-system" value="default"
+                                class="namespace-text-input"
+                                onfocus="this.style.borderColor='var(--yellow-green)'"
+                                onblur="this.style.borderColor='var(--ash-grey)'" />
+                        </div>
                     </div>
 
                     <button id="scan-btn" class="btn-scan">🔍 Scan for Pods</button>
@@ -196,6 +202,15 @@
                     <h2>🖥️ Kubernetes Nodes Scanner</h2>
                     <p>View all nodes in your Kubernetes cluster</p>
 
+                    <div class="cluster-namespace-row" style="margin-bottom: 1.5rem;">
+                        <div class="cluster-selector-group">
+                            <label for="nodes-cluster-select" style="color: var(--pitch-black); font-weight: 600;">Cluster:</label>
+                            <select id="nodes-cluster-select" class="cluster-selector cluster-select-input">
+                                <option value="">— Loading clusters... —</option>
+                            </select>
+                        </div>
+                    </div>
+
                     <button id="scan-nodes-btn" class="btn-scan">🔍 Scan for Nodes</button>
 
                     <div id="nodes-bulk-options" class="bulk-toolbar" style="display: none;">
@@ -241,16 +256,65 @@
             <div id="settings" class="tab-content">
                 <div class="settings-panel">
                     <h2>⚙️ Settings</h2>
-                    <div class="settings-group">
-                        <label>
-                            <input type="checkbox" checked> Dark Mode
-                        </label>
-                        <label>
-                            <input type="checkbox" checked> Enable Notifications
-                        </label>
-                        <label>
-                            <input type="checkbox" checked> Auto-save conversations
-                        </label>
+
+                    <!-- Cluster Manager -->
+                    <div class="settings-section">
+                        <h3 class="settings-section-title">☁️ Cluster Manager</h3>
+                        <p class="settings-section-desc">Manage your Kubernetes cluster connections. Add, test, and remove clusters to scan pods and nodes across multiple environments.</p>
+
+                        <!-- Add Cluster Form -->
+                        <form id="add-cluster-form" class="cluster-add-form">
+                            <div class="cluster-form-grid">
+                                <div class="form-group">
+                                    <label for="cluster-name-input">Cluster Name *</label>
+                                    <input type="text" id="cluster-name-input" required placeholder="e.g. production" class="cluster-form-input" />
+                                </div>
+                                <div class="form-group">
+                                    <label for="cluster-display-input">Display Name</label>
+                                    <input type="text" id="cluster-display-input" placeholder="e.g. OpenStack Production" class="cluster-form-input" />
+                                </div>
+                                <div class="form-group">
+                                    <label for="cluster-ns-input">Default Namespace</label>
+                                    <input type="text" id="cluster-ns-input" placeholder="default" value="default" class="cluster-form-input" />
+                                </div>
+                                <div class="form-group">
+                                    <label for="cluster-context-input">Context (optional)</label>
+                                    <input type="text" id="cluster-context-input" placeholder="e.g. kubernetes-admin" class="cluster-form-input" />
+                                </div>
+                            </div>
+                            <div class="cluster-form-file-row">
+                                <div class="form-group" style="flex:1;">
+                                    <label for="cluster-kubeconfig-file">Kubeconfig File *</label>
+                                    <input type="file" id="cluster-kubeconfig-file" required accept=".yaml,.yml,.conf,.config,*" class="cluster-file-input" />
+                                </div>
+                                <label class="cluster-default-check">
+                                    <input type="checkbox" id="cluster-is-default" /> Set as default
+                                </label>
+                            </div>
+                            <div id="add-cluster-feedback" class="cluster-feedback"></div>
+                            <button type="submit" class="btn-primary cluster-add-btn">➕ Add Cluster</button>
+                        </form>
+
+                        <!-- Cluster List -->
+                        <div id="cluster-manager-list" class="cluster-manager-list">
+                            <p style="text-align: center; opacity: 0.7;">Loading clusters...</p>
+                        </div>
+                    </div>
+
+                    <!-- General Settings -->
+                    <div class="settings-section">
+                        <h3 class="settings-section-title">🎛️ General</h3>
+                        <div class="settings-group">
+                            <label>
+                                <input type="checkbox" checked> Dark Mode
+                            </label>
+                            <label>
+                                <input type="checkbox" checked> Enable Notifications
+                            </label>
+                            <label>
+                                <input type="checkbox" checked> Auto-save conversations
+                            </label>
+                        </div>
                     </div>
                 </div>
             </div>

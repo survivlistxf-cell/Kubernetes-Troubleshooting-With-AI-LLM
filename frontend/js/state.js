@@ -15,6 +15,10 @@ export const state = {
   lastScannedPods: [],
   lastScannedNodes: [],
 
+  // Multi-cluster support
+  clusters: [],           // All cluster configs from backend
+  activeClusterId: null,  // Currently selected cluster ID (null = default)
+
   // Details modal caches
   selectedPodForDetails: null,
   selectedPodDetailsPayload: null,
@@ -25,3 +29,4 @@ export const state = {
   sentMessageAttachments: new Map(), // messageId -> file[] (pentru atasamente din cache-ul browserului, abia trimise, pentru preview imediat)
   attachmentContentCache: new Map(), // attachmentId -> {content,name,type,size} (pentru atasamente din db, incarcate din istoric, pentru a nu le mai cere din nou din db)
 };
+

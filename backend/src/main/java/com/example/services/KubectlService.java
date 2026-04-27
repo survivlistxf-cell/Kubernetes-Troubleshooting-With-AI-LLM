@@ -1,5 +1,6 @@
 package com.example.services;
 
+import com.example.entities.ClusterConfig;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedReader;
@@ -29,6 +30,32 @@ public class KubectlService {
             System.err.println("kubectl quick check failed: " + e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Build the kubectl command prefix for a specific cluster configuration.
+     * Returns ["kubectl", "--kubeconfig", path] and optionally ["--context", ctx].
+     */
+    public List<String> buildKubectlPrefix(ClusterConfig cluster) {
+        List<String> prefix = new ArrayList<>();
+        prefix.add("kubectl");
+        prefix.add("--kubeconfig");
+        prefix.add(cluster.getKubeconfigPath());
+        if (cluster.getContextName() != null && !cluster.getContextName().isBlank()) {
+            prefix.add("--context");
+            prefix.add(cluster.getContextName());
+        }
+        return prefix;
+    }
+
+    /**
+     * Resolve the kubeconfig path for a given ClusterConfig, or fall back to the default.
+     */
+    public String resolveKubeconfigForCluster(ClusterConfig cluster) {
+        if (cluster != null && cluster.getKubeconfigPath() != null && !cluster.getKubeconfigPath().isBlank()) {
+            return cluster.getKubeconfigPath();
+        }
+        return resolveKubeconfigPath();
     }
 
     public String executeCommandWithTimeout(List<String> commandArgs, int timeoutSeconds) {

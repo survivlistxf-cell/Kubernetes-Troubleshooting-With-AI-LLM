@@ -57,7 +57,25 @@ CREATE INDEX IF NOT EXISTS idx_ctx_conversation_id ON conversation_context(conve
 CREATE INDEX IF NOT EXISTS idx_ctx_user_id ON conversation_context(user_id);
 CREATE INDEX IF NOT EXISTS idx_ctx_created_at ON conversation_context(created_at);
 
+-- Cluster configurations for multi-cluster support
+CREATE TABLE IF NOT EXISTS cluster_configs (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    display_name VARCHAR(255),
+    kubeconfig_path VARCHAR(500) NOT NULL,
+    context_name VARCHAR(255),
+    default_namespace VARCHAR(100) DEFAULT 'default',
+    is_default BOOLEAN DEFAULT FALSE,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_cluster_name ON cluster_configs(name);
+CREATE INDEX IF NOT EXISTS idx_cluster_active ON cluster_configs(is_active);
+
 -- Sample data (optional, for testing)
 -- Uncomment to seed initial data>
 -- INSERT INTO users (username, email, password) VALUES 
 -- ('testuser', 'test@example.com', '$2a$10$slYQmyNdGzin7olVN3p5/.O9wO2kxaq7VVrXvnHYNrKVUtnCC2ejm');
+

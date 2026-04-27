@@ -5,6 +5,7 @@ import {
 } from './utils.js';
 import { addAttachment } from './attachments.js';
 import { switchToTab } from './navigation.js';
+import { getSelectedClusterId } from './clusters.js';
 
 function setActiveNodeTab(tab) {
   const buttons = Array.from(document.querySelectorAll('#node-details-modal .pod-tab-btn'));
@@ -137,18 +138,22 @@ export function initNodesScanner() {
   });
 
   scanNodesBtn?.addEventListener('click', async () => {
+    const clusterSelect = document.getElementById('nodes-cluster-select');
+    const clusterId = getSelectedClusterId(clusterSelect);
+
     scanNodesBtn.disabled = true;
     scanNodesBtn.style.opacity = '0.6';
     nodesScanLoading.style.display = 'block';
     nodesScanResults.style.display = 'none';
     nodesList.innerHTML = '';
     state.lastScannedNodes = [];
+    state.activeClusterId = clusterId;
     selectedNodes.clear();
     if (bulkOptions) bulkOptions.style.display = 'none';
     if (selectAllCheckbox) selectAllCheckbox.checked = false;
     updateUI();
 
-    const { resp, data } = await scanNodes();
+    const { resp, data } = await scanNodes(clusterId);
 
     nodesScanLoading.style.display = 'none';
     nodesScanResults.style.display = 'block';
@@ -274,7 +279,7 @@ export function initNodesScanner() {
         
         if (levels.length > 0) {
           const detailsResults = await Promise.all(levels.map(async lvl => {
-            const { resp, data } = await nodeDetails(node.name, lvl);
+            const { resp, data } = await nodeDetails(node.name, lvl, state.activeClusterId);
             return { lvl, ok: resp.ok, data };
           }));
 
@@ -332,7 +337,7 @@ async function loadNodeTabDetails(tab) {
   const el = document.getElementById(`node-details-${tab === 'json' ? 'json' : tab}`);
   if (el) el.textContent = 'Loading...';
 
-  const { resp, data } = await nodeDetails(name, tab);
+  const { resp, data } = await nodeDetails(name, tab, state.activeClusterId);
   if (resp.ok) {
     if (!state.selectedNodeDetailsPayload) state.selectedNodeDetailsPayload = {};
     state.selectedNodeDetailsPayload[payloadKey] = data[payloadKey];

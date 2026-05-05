@@ -1,11 +1,17 @@
 import { state } from './state.js';
 import { scanNodes, nodeDetails } from './api.js';
-import { 
-  escapeHtml, prettyJson, updateBulkUIComponent, syncCheckboxes, createHelperButton 
+import {
+  escapeHtml, prettyJson, updateBulkUIComponent, syncCheckboxes, createHelperButton,
+  buildSelectionSignature
 } from './utils.js';
-import { addAttachment } from './attachments.js';
+import { addAttachment, replaceOrAddScanAttachment } from './attachments.js';
 import { switchToTab } from './navigation.js';
 import { getSelectedClusterId } from './clusters.js';
+import { saveNodesScan, readSavedNodesScan, clearNodesScan } from './session.js';
+
+function getSelectedNodeLevels() {
+  return Array.from(document.querySelectorAll('.node-detail-level:checked')).map(cb => cb.value);
+}
 
 function setActiveNodeTab(tab) {
   const buttons = Array.from(document.querySelectorAll('#node-details-modal .pod-tab-btn'));
@@ -76,13 +82,41 @@ export function initNodesScanner() {
 
   let selectedNodes = new Set(); // Stores node names
 
+  function currentSignature() {
+    return buildSelectionSignature(selectedNodes, getSelectedNodeLevels());
+  }
+
+  function isAlreadyAdded() {
+    const last = state.lastNodeBulkAdd;
+    if (!last) return false;
+    if (last.signature !== currentSignature()) return false;
+    return state.attachedFiles.some(f => f && f._scanContext && f.name === last.attachmentName);
+  }
+
   function updateUI() {
     updateBulkUIComponent(
       { bulkOptions, selectedCountEl, bulkAddBtn, selectAllCheckbox },
       selectedNodes,
-      state.lastScannedNodes || []
+      state.lastScannedNodes || [],
+      { alreadyAdded: isAlreadyAdded() }
     );
+    syncRowSelectedClass();
   }
+
+  function syncRowSelectedClass() {
+    if (!nodesList) return;
+    nodesList.querySelectorAll('.pod-item').forEach(row => {
+      const cb = row.querySelector('.node-item-checkbox');
+      const name = cb?.getAttribute('data-node-name');
+      row.classList.toggle('is-selected', !!name && selectedNodes.has(name));
+    });
+  }
+
+  document.querySelectorAll('.node-detail-level').forEach(cb => {
+    cb.addEventListener('change', () => updateUI());
+  });
+
+  document.addEventListener('attachments:changed', () => updateUI());
 
   selectAllCheckbox?.addEventListener('change', (e) => {
     const checked = e.target.checked;
@@ -163,18 +197,25 @@ export function initNodesScanner() {
       nodesList.innerHTML = `<p style="text-align:center;color:#d32f2f;">Error: ${escapeHtml(msg)}</p>`;
       scanNodesBtn.disabled = false;
       scanNodesBtn.style.opacity = '1';
+      clearNodesScan();
       return;
     }
 
     const nodes = data?.nodes || [];
     state.lastScannedNodes = nodes;
+    renderNodesList(nodes);
+    saveNodesScan({ nodes, clusterId, ts: Date.now() });
 
+    scanNodesBtn.disabled = false;
+    scanNodesBtn.style.opacity = '1';
+  });
+
+  function renderNodesList(nodes) {
+    nodesList.innerHTML = '';
     if (bulkOptions && nodes.length > 0) bulkOptions.style.display = 'block';
 
     if (!nodes.length) {
       nodesList.innerHTML = '<p style="text-align:center;opacity:0.7;">No nodes found.</p>';
-      scanNodesBtn.disabled = false;
-      scanNodesBtn.style.opacity = '1';
       return;
     }
 
@@ -186,7 +227,7 @@ export function initNodesScanner() {
       div.style.gap = '1rem';
 
       div.innerHTML = `
-        <input type="checkbox" class="node-item-checkbox" data-node-name="${escapeHtml(n.name)}" 
+        <input type="checkbox" class="node-item-checkbox" data-node-name="${escapeHtml(n.name)}"
                style="width: 18px; height: 18px; margin-top: 0.5rem; accent-color: var(--yellow-green); flex-shrink: 0;"
                ${selectedNodes.has(n.name) ? 'checked' : ''}>
         <div style="flex: 1;">
@@ -203,12 +244,15 @@ export function initNodesScanner() {
 
       const cb = div.querySelector('.node-item-checkbox');
       cb.addEventListener('change', (e) => {
-        if (e.target.checked) {
-          selectedNodes.add(n.name);
-        } else {
-          selectedNodes.delete(n.name);
-        }
-        updateBulkUI();
+        if (e.target.checked) selectedNodes.add(n.name);
+        else selectedNodes.delete(n.name);
+        updateUI();
+      });
+
+      div.addEventListener('click', (ev) => {
+        if (ev.target.closest('button') || ev.target.closest('.node-item-checkbox')) return;
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
       });
     });
 
@@ -233,9 +277,17 @@ export function initNodesScanner() {
       });
     });
 
-    scanNodesBtn.disabled = false;
-    scanNodesBtn.style.opacity = '1';
-  });
+    updateUI();
+  }
+
+  // Restore previous scan results on init
+  const savedNodes = readSavedNodesScan();
+  if (savedNodes && Array.isArray(savedNodes.nodes) && savedNodes.nodes.length) {
+    state.lastScannedNodes = savedNodes.nodes;
+    state.activeClusterId = savedNodes.clusterId || null;
+    nodesScanResults.style.display = 'block';
+    renderNodesList(savedNodes.nodes);
+  }
 
 
 
@@ -263,8 +315,9 @@ export function initNodesScanner() {
   bulkAddBtn?.addEventListener('click', async () => {
     if (selectedNodes.size === 0) return;
 
-    const levels = Array.from(document.querySelectorAll('.node-detail-level:checked')).map(cb => cb.value);
-    
+    const levels = getSelectedNodeLevels();
+    const signature = currentSignature();
+
     bulkAddBtn.disabled = true;
     bulkAddBtn.textContent = '⌛ Fetching details...';
 
@@ -276,7 +329,7 @@ export function initNodesScanner() {
       for (const node of selectedNodeList) {
         aggregatedContext += `--- NODE: ${node.name} ---\n`;
         aggregatedContext += `Status: ${node.status} | Roles: ${node.roles || 'N/A'} | Version: ${node.version}\n`;
-        
+
         if (levels.length > 0) {
           const detailsResults = await Promise.all(levels.map(async lvl => {
             const { resp, data } = await nodeDetails(node.name, lvl, state.activeClusterId);
@@ -297,21 +350,23 @@ export function initNodesScanner() {
         aggregatedContext += '\n';
       }
 
-      addAttachment({ 
-        name: `bulk-nodes-${selectedNodeList.length}.txt`, 
-        size: aggregatedContext.length, 
-        type: 'text/plain', 
-        content: aggregatedContext, 
-        _scanContext: true 
-      });
+      const previousName = state.lastNodeBulkAdd?.attachmentName;
+      const finalName = replaceOrAddScanAttachment({
+        name: `bulk-nodes-${selectedNodeList.length}.txt`,
+        size: aggregatedContext.length,
+        type: 'text/plain',
+        content: aggregatedContext,
+        _scanContext: true,
+      }, previousName);
+
+      state.lastNodeBulkAdd = { signature, attachmentName: finalName };
       switchToTab('home');
     } catch (err) {
       console.error('Bulk fetch failed', err);
       alert('Failed to fetch some node details. Check console.');
     } finally {
-      bulkAddBtn.disabled = false;
-      updateUI();
       bulkAddBtn.innerHTML = `<span>➕</span> Add context for <strong>${selectedNodes.size}</strong> selected nodes`;
+      updateUI();
     }
   });
 }

@@ -8,6 +8,9 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +30,19 @@ import com.kdiag.server.protocol.KdiagModels.Artifact;
 public class AiEngine {
 
     private static final Logger logger = LoggerFactory.getLogger(AiEngine.class);
+    private static final int MAX_RECENT_HISTORY_MESSAGES = 12;
+    private static final int SUMMARY_TRIGGER_HISTORY_MESSAGES = 10;
+    private static final int MAX_RETRIEVAL_SNIPPET_CHARS = 200;
+    private static final int MAX_ARTIFACTS_PER_REQUEST = 5;
+    private static final int MAX_ARTIFACT_PROMPT_CHARS = 3000;
+    private static final int MAX_TOTAL_PROMPT_CHARS = 32000;
+    private static final int MAX_SUMMARY_INPUT_MESSAGES = 12;
+    private static final int MAX_SUMMARY_CHARS = 1600;
+    private final ExecutorService summaryExecutor = Executors.newFixedThreadPool(2, runnable -> {
+        Thread thread = new Thread(runnable, "kdiag-summary-worker");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final OllamaClient ollama;
     private final KubernetesDocsScraper docsScraper;
     private final KubernetesDynamicSearcher dynamicSearcher;
@@ -54,36 +70,51 @@ public class AiEngine {
                 + (artifacts != null ? artifacts.size() : 0));
         // 1. Process and split artifacts (especially .txt files with multiple sections)
         List<Artifact> processedArtifacts = processArtifacts(artifacts);
+        List<Artifact> promptArtifacts = limitArtifacts(processedArtifacts, MAX_ARTIFACTS_PER_REQUEST);
 
         // 2. Fetch relevant docs
-        String relevantDocs = fetchRelevantDocs(userText, processedArtifacts);
+        String relevantDocs = fetchRelevantDocs(userText, promptArtifacts);
 
         // 3. Build current user message content
-        String userContent = buildUserPrompt(userText, processedArtifacts);
+        String userContent = buildUserPrompt(userText, promptArtifacts);
 
         // 4. Update history with user message
         if (conversationId != null) {
             debugLog("[AiEngine] Adding user turn to history for " + conversationId);
             historyService.addEntry(conversationId, "user", userContent); // memorie pe termen scurt (cache backend)
+            historyService.trimHistoryToLatest(conversationId, MAX_RECENT_HISTORY_MESSAGES);
         }
 
         // 5. Build full message list for Ollama
         List<Map<String, String>> messages = new java.util.ArrayList<>();
-        String systemPrompt = buildSystemPrompt(relevantDocs);
+        String conversationSummary = conversationId != null ? historyService.getConversationSummary(conversationId) : null;
+        String systemPrompt = buildSystemPrompt(relevantDocs, conversationSummary);
+        int remainingBudget = MAX_TOTAL_PROMPT_CHARS;
         messages.add(Map.of("role", "system", "content", systemPrompt));
+        remainingBudget -= systemPrompt.length();
 
         if (conversationId != null) {
             List<com.kdiag.server.ai.history.HistoryService.HistoryEntry> historyEntries = historyService
                     .getHistory(conversationId); // extragem toate mesajele anterioare din cache
             debugLog("[AiEngine] History for [" + conversationId + "] has " + historyEntries.size() + " entries.");
-            historyEntries.forEach(entry -> {
+            for (int i = 0; i < historyEntries.size(); i++) {
+                com.kdiag.server.ai.history.HistoryService.HistoryEntry entry = historyEntries.get(i);
+                String content = entry.content();
+                if (content == null || content.isBlank()) {
+                    continue;
+                }
+                if (remainingBudget <= 0) {
+                    break;
+                }
+                String clipped = truncateToBudget(content, remainingBudget);
                 debugLog("[AiEngine]   - " + entry.role() + ": "
-                        + (entry.content().length() > 50 ? entry.content().substring(0, 50).replace("\n", " ") + "..."
-                                : entry.content()));
-                messages.add(Map.of("role", entry.role(), "content", entry.content()));
-            });
+                        + (clipped.length() > 50 ? clipped.substring(0, 50).replace("\n", " ") + "..."
+                                : clipped));
+                messages.add(Map.of("role", entry.role(), "content", clipped));
+                remainingBudget -= clipped.length();
+            }
         } else {
-            messages.add(Map.of("role", "user", "content", userContent));
+            messages.add(Map.of("role", "user", "content", truncateToBudget(userContent, remainingBudget)));
         }
 
         debugLog("[AiEngine] Final message list size: " + messages.size());
@@ -140,6 +171,8 @@ public class AiEngine {
         // 6. Save assistant response to history
         if (conversationId != null && assistantText != null) {
             historyService.addEntry(conversationId, "assistant", assistantText);
+            historyService.trimHistoryToLatest(conversationId, MAX_RECENT_HISTORY_MESSAGES);
+            maybeScheduleConversationSummary(conversationId);
         }
 
         return new AiResult(assistantText, null);
@@ -200,8 +233,8 @@ public class AiEngine {
                     // creeaza un sir lung de text (max 200 caractere) in care pune cuvinte cheie
                     // din fiecare fisier atasat + user text
                     if (a != null && a.getContent() != null) {
-                        String snippet = a.getContent().length() > 200
-                                ? a.getContent().substring(0, 200)
+                        String snippet = a.getContent().length() > MAX_RETRIEVAL_SNIPPET_CHARS
+                            ? a.getContent().substring(0, MAX_RETRIEVAL_SNIPPET_CHARS)
                                 : a.getContent();
                         query.append(" ").append(snippet);
                     }
@@ -215,7 +248,7 @@ public class AiEngine {
         }
     }
 
-    private String buildSystemPrompt(String relevantDocs) {
+    private String buildSystemPrompt(String relevantDocs, String conversationSummary) {
         StringBuilder sb = new StringBuilder();
         sb.append("You are a Kubernetes diagnostics assistant.\n");
         sb.append("Be direct and helpful.\n\n");
@@ -227,6 +260,12 @@ public class AiEngine {
         sb.append("- Focus on understanding the problem first, not just solutions\n");
         sb.append(
                 "- DYNAMIC SEARCH: If the current documentation context does not contain enough information to solve a complex or obscure issue, DO NOT invent a solution. Instead, output EXACTLY this string and nothing else: `[NEEDS_SEARCH: <query>]` where `<query>` is the short, exact term you want to search on kubernetes.io (e.g. `[NEEDS_SEARCH: nginx ingress 403 error]`). I will fetch the internet for you and return the documents.\n\n");
+
+        if (conversationSummary != null && !conversationSummary.isBlank()) {
+            sb.append("Conversation summary so far:\n");
+            sb.append(conversationSummary.trim());
+            sb.append("\n\n");
+        }
 
         if (relevantDocs != null && !relevantDocs.isBlank()) {
             sb.append("Official Kubernetes docs (from cache):\n");
@@ -244,17 +283,94 @@ public class AiEngine {
 
         if (artifacts != null && !artifacts.isEmpty()) {
             sb.append("\n--- New evidence provided in this turn ---\n");
-            int maxArtifacts = Math.min(artifacts.size(), 10);
+            int maxArtifacts = Math.min(artifacts.size(), MAX_ARTIFACTS_PER_REQUEST);
             for (int i = 0; i < maxArtifacts; i++) {
                 Artifact a = artifacts.get(i);
                 if (a == null)
                     continue;
                 sb.append("[").append(a.getType()).append("]\n");
-                sb.append(truncate(a.getContent(), 10000)).append("\n\n");
+                sb.append(truncate(a.getContent(), MAX_ARTIFACT_PROMPT_CHARS)).append("\n\n");
             }
         }
 
         return sb.toString();
+    }
+
+    private List<Artifact> limitArtifacts(List<Artifact> artifacts, int limit) {
+        if (artifacts == null || artifacts.isEmpty() || limit <= 0) {
+            return List.of();
+        }
+        if (artifacts.size() <= limit) {
+            return artifacts;
+        }
+        return artifacts.subList(0, limit);
+    }
+
+    private void maybeScheduleConversationSummary(String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return;
+        }
+
+        List<com.kdiag.server.ai.history.HistoryService.HistoryEntry> snapshot = historyService.snapshotHistory(conversationId);
+        if (snapshot.size() < SUMMARY_TRIGGER_HISTORY_MESSAGES) {
+            return;
+        }
+
+        if (!historyService.markSummaryJobInProgress(conversationId)) {
+            return;
+        }
+
+        final String existingSummary = historyService.getConversationSummary(conversationId);
+        final int snapshotSize = snapshot.size();
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                String summary = generateConversationSummary(existingSummary, snapshot);
+                if (summary != null && !summary.isBlank()) {
+                    historyService.setConversationSummary(conversationId, summary.trim());
+                    historyService.trimHistoryBefore(conversationId, snapshotSize);
+                }
+            } catch (Exception e) {
+                logger.error("Failed to summarize conversation {}", conversationId, e);
+            } finally {
+                historyService.clearSummaryJobInProgress(conversationId);
+            }
+        }, summaryExecutor);
+    }
+
+    private String generateConversationSummary(String existingSummary,
+            List<com.kdiag.server.ai.history.HistoryService.HistoryEntry> snapshot) {
+        List<Map<String, String>> messages = new java.util.ArrayList<>();
+        messages.add(Map.of("role", "system", "content",
+                "You summarize Kubernetes troubleshooting conversations. Return a concise Romanian summary under 1600 characters. Focus on: user goal, key errors/logs, commands tried, assistant advice already given, and unresolved next steps. Do not invent details."));
+
+        StringBuilder userPrompt = new StringBuilder();
+        userPrompt.append("Existing summary (if any):\n");
+        userPrompt.append(existingSummary == null || existingSummary.isBlank() ? "<none>" : existingSummary.trim());
+        userPrompt.append("\n\nRecent conversation transcript:\n");
+
+        int maxMessages = Math.min(snapshot.size(), MAX_SUMMARY_INPUT_MESSAGES);
+        int startIndex = Math.max(0, snapshot.size() - maxMessages);
+        for (int i = startIndex; i < snapshot.size(); i++) {
+            var entry = snapshot.get(i);
+            String content = entry.content() == null ? "" : entry.content().trim();
+            if (content.isBlank()) {
+                continue;
+            }
+            userPrompt.append(entry.role().toUpperCase(Locale.ROOT)).append(": ").append(content).append("\n");
+        }
+
+        messages.add(Map.of("role", "user", "content", userPrompt.toString()));
+
+        String summary = ollama.chat(messages);
+        if (summary == null) {
+            return null;
+        }
+        summary = summary.trim();
+        if (summary.length() > MAX_SUMMARY_CHARS) {
+            summary = summary.substring(0, MAX_SUMMARY_CHARS);
+        }
+        return summary;
     }
 
     private String fallbackAnswer(String userText, List<Artifact> artifacts, String relevantDocs) {
@@ -335,6 +451,16 @@ public class AiEngine {
         if (s.length() <= max)
             return s;
         return s.substring(0, max) + "\n...[truncated (limit 10k)]";
+    }
+
+    private static String truncateToBudget(String s, int maxChars) {
+        if (s == null)
+            return "";
+        if (maxChars <= 0)
+            return "";
+        if (s.length() <= maxChars)
+            return s;
+        return s.substring(0, maxChars);
     }
 
     public static class AiResult {

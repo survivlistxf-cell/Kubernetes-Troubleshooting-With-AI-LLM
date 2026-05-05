@@ -1,6 +1,7 @@
 import { state } from './state.js';
 import { generateConversationId } from './utils.js';
 import { loadChatHistoryIntoTab } from './history.js';
+import { saveActiveTab } from './session.js';
 
 export function switchToTab(tabName) {
   document.querySelectorAll('.nav-item').forEach(btn => btn.classList.remove('active'));
@@ -10,6 +11,8 @@ export function switchToTab(tabName) {
   const tab = document.getElementById(tabName);
   if (btn) btn.classList.add('active');
   if (tab) tab.classList.add('active');
+
+  saveActiveTab(tabName);
 
   if (tabName === 'chat') loadChatHistoryIntoTab();
 }

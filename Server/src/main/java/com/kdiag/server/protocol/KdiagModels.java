@@ -8,6 +8,7 @@ import java.util.Map;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 /**
  * Minimal kdiag/1.0 protocol models (MVP).
@@ -27,6 +28,7 @@ public final class KdiagModels {
         private String protocol_version;
 
         @JsonProperty("conversation_id")
+        @Size(max = 100)
         private String conversation_id;
 
         @NotNull
@@ -37,6 +39,7 @@ public final class KdiagModels {
         private Context context; // Spune despre CE obiecte vorbim (identitate)
 
         @Valid
+        @Size(max = 5)
         private List<Artifact> artifacts; // Spune CE dovezi avem despre ele (date brute)
 
         private Map<String, Object> preferences;
@@ -46,6 +49,11 @@ public final class KdiagModels {
             return protocol_version;
         }
 
+                private static final int MAX_CONVERSATION_ID_CHARS = 100;
+                private static final int MAX_MESSAGE_TEXT_CHARS = 4000;
+                private static final int MAX_ARTIFACTS_PER_REQUEST = 5;
+                private static final int MAX_ARTIFACT_TARGET_CHARS = 255;
+                private static final int MAX_ARTIFACT_CONTENT_CHARS = 10000;
         @JsonProperty("protocol_version")
         public void setProtocol_version(String protocol_version) {
             this.protocol_version = protocol_version;
@@ -64,7 +72,6 @@ public final class KdiagModels {
         public Message getMessage() {
             return message;
         }
-
         public void setMessage(Message message) {
             this.message = message;
         }
@@ -149,6 +156,7 @@ public final class KdiagModels {
         private String role;
 
         @NotBlank
+        @Size(max = 4000)
         private String text;
 
         public String getRole() {
@@ -265,6 +273,7 @@ public final class KdiagModels {
         /**
          * Mostly informational (e.g., "pod/ns/name").
          */
+        @Size(max = 255)
         private String target;
 
         private String container;
@@ -272,6 +281,7 @@ public final class KdiagModels {
         /**
          * Raw content (logs/describe/events). Keep it as string for MVP.
          */
+        @Size(max = 10000)
         private String content;
 
         /**

@@ -96,24 +96,18 @@ Frontend va rula pe: `http://localhost:3000`
 - CORS este activat în ambele aplicații
 - Database: H2 în-memorie (pentru development)
 
-## 🤖 AI routing (Backend → AI Server → Ollama)
+## ☸️ Kubernetes/OpenStack deploy
 
-UI-ul continuă să trimită mesajele la backend-ul existent pe `http://localhost:8080/api/chat`.
+Pentru OpenStack, baza de deploy este gândită să ruleze într-un namespace separat, de exemplu `kdiag`.
+Frontend-ul este expus prin `NodePort 30082`, iar Octavia poate trimite traficul din floating IP-ul `203.25.143.78` către nodePort-ul respectiv.
 
-Backend-ul (8080) **forward-ează** prompt-ul către AI Server (8090) la `POST http://localhost:8090/v1/chat` folosind payload `kdiag/1.0`.
-Dacă AI Server nu e pornit / nu răspunde, backend-ul revine la răspunsul „legacy” (heuristic).
+Arhitectura din manifestele K8s este:
 
-### Config
+- `frontend` public
+- `backend` intern
+- `postgres` comun pentru backend
 
-Backend: `backend/src/main/resources/application.properties`
-- `ai.server.base-url=http://localhost:8090`
-
-AI Server: `Server/src/main/resources/application.properties`
-- `ollama.base-url=http://localhost:11434`
-- `ollama.model=llama3.1`
-
-AI Server folosește endpoint-ul OpenAI-compatible din Ollama: `POST /v1/chat/completions`.
-Dacă la tine Ollama nu are acest endpoint (ci doar `/api/chat`), spune-mi și îl ajustez.
+Fișierele de deploy sunt în [k8s](k8s).
 
 ## 📚 Resurse Utile
 

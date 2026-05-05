@@ -11,22 +11,31 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 
 @Service
 public class AiForwardingService {
 
     private static final Logger logger = LoggerFactory.getLogger(AiForwardingService.class);
+    private static final int CONNECT_TIMEOUT_MS = 3_000;
+    private static final int READ_TIMEOUT_MS = 65_000;
 
     public record ForwardResult(String text, String conversationId) {
     }
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${ai.server.base-url:http://localhost:8090}")
     private String aiServerBaseUrl;
 
     public AiForwardingService() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        // Connect timeout keeps the request from hanging while establishing the TCP connection.
+        factory.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        // Read timeout is slightly above Ollama's own timeout so the backend can surface a clear failure.
+        factory.setReadTimeout(READ_TIMEOUT_MS);
+        this.restTemplate = new RestTemplate(factory);
     }
 
     public String getAiServerBaseUrl() {

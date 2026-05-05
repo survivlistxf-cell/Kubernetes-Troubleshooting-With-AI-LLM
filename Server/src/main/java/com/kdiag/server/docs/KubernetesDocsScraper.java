@@ -21,6 +21,10 @@ import java.util.*;
 public class KubernetesDocsScraper {
 
     private static final Logger logger = LoggerFactory.getLogger(KubernetesDocsScraper.class);
+    private static final int STOPWORDS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+    private static final int DOC_FETCH_TIMEOUT_MS = 8000;
+    private static final int MAX_CONTEXT_CHARS = 12000;
+    private static final int MAX_SCRAPED_DOC_CHARS = 20000;
 
     private final KubernetesDocPageRepository repository;
     private final RestTemplate restTemplate;
@@ -28,16 +32,13 @@ public class KubernetesDocsScraper {
     private Set<String> stopWords = new HashSet<>();
     private long lastStopwordsFetch = 0;
 
-    // Pages to index - ordered by relevance
+        // Pages to index - ordered by relevance
     private static final List<String> DOC_URLS = List.of(
             "https://kubernetes.io/docs/tasks/debug/debug-application/",
             "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/",
             "https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/",
             "https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/",
             "https://kubernetes.io/docs/tasks/debug/debug-cluster/");
-
-    // Max chars to inject per request
-    private static final int MAX_CONTEXT_CHARS = 15000;
 
     public KubernetesDocsScraper(KubernetesDocPageRepository repository) {
         this.repository = repository;
@@ -46,7 +47,7 @@ public class KubernetesDocsScraper {
 
     private void ensureStopwordsLoaded() {
         // Cache for 24 hours
-        if (System.currentTimeMillis() - lastStopwordsFetch > 24 * 60 * 60 * 1000L || stopWords.isEmpty()) {
+        if (System.currentTimeMillis() - lastStopwordsFetch > STOPWORDS_CACHE_TTL_MS || stopWords.isEmpty()) {
             try {
                 logger.info("Fetching English stop words from NLTK/GitHub API...");
                 // Fetch standard english stopwords list from a reliable public source
@@ -84,7 +85,7 @@ public class KubernetesDocsScraper {
                     logger.info("Fetching initial static doc: {}", url);
                     Document doc = Jsoup.connect(url)
                             .userAgent("Mozilla/5.0 (compatible; Kubexplain/1.0)")
-                            .timeout(8000)
+                            .timeout(DOC_FETCH_TIMEOUT_MS)
                             .get();
 
                     Element main = doc.selectFirst("main, article, .td-content, #content");
@@ -98,7 +99,7 @@ public class KubernetesDocsScraper {
                         title = "Kubernetes Documentation";
                     }
 
-                    KubernetesDocPage page = new KubernetesDocPage(url, title, truncate(text, 20000), false);
+                    KubernetesDocPage page = new KubernetesDocPage(url, title, truncate(text, MAX_SCRAPED_DOC_CHARS), false);
                     repository.save(page);
                 } catch (Exception e) {
                     logger.error("Failed to fetch static doc {}", url, e);

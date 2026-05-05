@@ -8,6 +8,8 @@ import { loadChatHistoryIntoTab } from './history.js';
 // DOM refs (initialized in initChat)
 let promptForm, promptInput, messagesArea;
 
+const MAX_MESSAGE_LENGTH = 4000;
+
 // Typing indicator
 function showTypingIndicator() {
   const typingDiv = document.createElement('div');
@@ -288,6 +290,12 @@ async function handleSubmit(ev) {
   const hasAttachments = filesSnapshot.length > 0;
 
   if (!message && !hasAttachments) return;
+
+  // Enforce message length limit (mirror KdiagModels and backend Chat.userMessage)
+  if (message.length > MAX_MESSAGE_LENGTH) {
+    addMessage(`Error: Message exceeds maximum length of ${MAX_MESSAGE_LENGTH} characters. Current: ${message.length}`, 'assistant');
+    return;
+  }
 
   hideWelcomeHeader();
   autoCollapseSidebar();

@@ -5,28 +5,29 @@ Acest fisier este bazat pe inventarul din `METRICI_EFICIENTA.md` si propune opti
 ## 1) Prioritate mare (impact mare, risc mic)
 
 1. Limiteaza history in AI server (in-memory)
-- Problema: `HistoryService` nu are plafon pe numar mesaje/conversatie.
+- Problema: `HistoryService` poate creste mult daca nu comprimi conversatia.
 - Efect: crestere prompt + memorie + latenta.
 - Unde: `Server/src/main/java/com/kdiag/server/ai/history/HistoryService.java`
 - Recomandare:
-  - `MAX_MESSAGES_PER_CONVERSATION = 20`
-  - la insert, pastrezi ultimele 20 (evict oldest).
+  - pastrezi ultimele `12` mesaje brute.
+  - cand conversatia ajunge la `10` mesaje brute, declansezi sumarizarea in fundal.
+  - rezumatul devine contextul compact pentru mesajele vechi, iar mesajele noi raman brute.
 
 2. Fereastra de context in `AiEngine`
-- Problema: se trimit toate mesajele din istoric catre Ollama.
+- Problema: istoricul poate creste mult si trebuie lasat sub controlul unui buget global, nu al unui prag fix pe numar de mesaje.
 - Unde: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
 - Recomandare:
-  - trimite doar ultimele `N` mesaje, ex. `N=12`.
-  - optional: pastreaza intotdeauna ultimul mesaj user + ultimul raspuns assistant.
+  - trimite istoricul complet, dar lasa `MAX_TOTAL_PROMPT_CHARS` sa taie automat ce nu mai incape.
+  - pastreaza prioritar mesajul user curent si sistem promptul; restul se reduc doar daca depaseste bugetul global.
 
-3. Timeout explicit pentru backend -> AI server
+3. [x] Timeout explicit pentru backend -> AI server (solved)
 - Problema: `RestTemplate` fara connect/read timeout.
 - Unde: `backend/src/main/java/com/example/services/AiForwardingService.java`
 - Recomandare:
   - `connectTimeout=3s`
   - `readTimeout=65s` (usor peste `OLLAMA_TIMEOUT_SECONDS=60`).
 
-4. Limita client-side la attach text
+4. [x] Limita client-side la attach text (solved)
 - Problema: frontend citeste fisierele integral, fara limita.
 - Unde: `frontend/js/attachments.js`
 - Recomandare:
@@ -35,34 +36,36 @@ Acest fisier este bazat pe inventarul din `METRICI_EFICIENTA.md` si propune opti
 
 ## 2) Prioritate medie (impact mare, risc mediu)
 
-1. Buget total de caractere per request catre LLM
+1. [x] Buget total de caractere per request catre LLM (solved)
 - Problema: exista limita per artifact (10k), dar nu buget global clar.
 - Unde: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
 - Recomandare:
-  - adauga `MAX_TOTAL_PROMPT_CHARS = 35000`.
+  - adauga `MAX_TOTAL_PROMPT_CHARS = 32000`.
+  - limiteaza la maximum `5` artefacte per request.
   - cand depasesti, aplici truncare pe artifacts/history in ordinea de prioritate.
 
-2. Ajusteaza `MAX_CONTEXT_CHARS` docs
+2. [x] Ajusteaza `MAX_CONTEXT_CHARS` docs (setat la 12000) (solved)
 - Unde: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
-- Acum: `15000`
+- Acum: `12000` (was 15000)
 - Recomandare:
   - test A/B: `12000` vs `15000`.
   - daca raspunsurile raman corecte, pastreaza `12000` pentru latenta mai buna.
 
-3. Limita pentru dynamic RAG
+3. [x] Limita pentru dynamic RAG  (solved)
 - Unde: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
 - Acum: top `2` rezultate, fiecare pana la `15000` chars.
 - Recomandare:
   - pastreaza top 2, dar limiteaza fiecare la `10000` chars.
   - adauga deduplicare simpla de paragrafe repetitive.
 
-4. Validari protocol (`@Size`)
+4. [x] Validari protocol (`@Size`) (solved)
 - Problema: `KdiagModels` nu limiteaza campuri text.
 - Unde: `Server/src/main/java/com/kdiag/server/protocol/KdiagModels.java`
 - Recomandare:
   - `message.text`: max `4000`
-  - `artifact.content`: max `12000`
-  - `artifact.target`: max `300`
+  - `artifact.content`: max `10000`
+  - `artifact.target`: max `255`
+  - `artifacts`: max `5`
 
 ## 3) Prioritate mica (fine tuning)
 
@@ -83,11 +86,12 @@ Acest fisier este bazat pe inventarul din `METRICI_EFICIENTA.md` si propune opti
 ## 4) Parametri tinta recomandati (set initial)
 
 - `MAX_MESSAGES_PER_CONVERSATION`: `20`
-- `MAX_TOTAL_PROMPT_CHARS`: `35000`
+- `MAX_TOTAL_PROMPT_CHARS`: `32000`
 - `MAX_CONTEXT_CHARS` docs: `12000` (daca testele raman bune)
 - dynamic doc snippet max: `10000`
 - `message.text` max: `4000`
-- `artifact.content` max: `12000`
+- `artifact.content` max: `10000`
+- `artifacts` max: `5`
 - `RestTemplate connect/read timeout`: `3s / 65s`
 
 ## 5) KPI de urmarit dupa schimbari

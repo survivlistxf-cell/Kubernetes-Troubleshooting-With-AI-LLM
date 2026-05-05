@@ -1,6 +1,7 @@
 package com.example.entities;
 
 import jakarta.persistence.*;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -12,6 +13,9 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class Chat {
 
+    private static final int MAX_CONVERSATION_ID_CHARS = 100;
+    private static final int MAX_USER_MESSAGE_CHARS = 4000;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -21,6 +25,7 @@ public class Chat {
     private User user;
 
     @Column(columnDefinition = "TEXT", nullable = false)
+    @Size(max = MAX_USER_MESSAGE_CHARS)
     private String userMessage;
 
     @Column(columnDefinition = "TEXT", nullable = false)
@@ -29,7 +34,7 @@ public class Chat {
     /**
      * Client-side conversation id (UUID string) to group related chat exchanges.
      */
-    @Column(name = "conversation_id", length = 100)
+    @Column(name = "conversation_id", length = MAX_CONVERSATION_ID_CHARS)
     private String conversationId;
 
     @Column(name = "created_at")

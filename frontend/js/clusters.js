@@ -43,6 +43,7 @@ function renderClusterDropdowns() {
     });
 
     // Restore previous selection, or select default cluster
+    const before = sel.value;
     if (currentVal && [...sel.options].some(o => o.value === currentVal)) {
       sel.value = currentVal;
     } else {
@@ -50,6 +51,9 @@ function renderClusterDropdowns() {
       if (defaultCluster) {
         sel.value = String(defaultCluster.id);
       }
+    }
+    if (sel.value && sel.value !== before) {
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
     }
   });
 }

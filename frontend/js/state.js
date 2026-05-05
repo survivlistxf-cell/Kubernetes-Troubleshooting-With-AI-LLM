@@ -25,6 +25,11 @@ export const state = {
   selectedNodeForDetails: null,
   selectedNodeDetailsPayload: null,
 
+  // Last bulk-add snapshots for pods/nodes scanners
+  // shape: { signature: string, attachmentName: string }
+  lastPodBulkAdd: null,
+  lastNodeBulkAdd: null,
+
   // Chat attachment rendering + preview
   sentMessageAttachments: new Map(), // messageId -> file[] (pentru atasamente din cache-ul browserului, abia trimise, pentru preview imediat)
   attachmentContentCache: new Map(), // attachmentId -> {content,name,type,size} (pentru atasamente din db, incarcate din istoric, pentru a nu le mai cere din nou din db)

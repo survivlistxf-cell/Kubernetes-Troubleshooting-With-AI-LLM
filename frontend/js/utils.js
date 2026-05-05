@@ -81,16 +81,26 @@ export function deriveTitleFrom(c) {
 
 /** Shared Scanner Utils **/
 
-export function updateBulkUIComponent({ bulkOptions, selectedCountEl, bulkAddBtn, selectAllCheckbox }, selectedSet, allItems) {
+export function updateBulkUIComponent({ bulkOptions, selectedCountEl, bulkAddBtn, selectAllCheckbox }, selectedSet, allItems, opts = {}) {
   if (!bulkOptions || !selectedCountEl || !bulkAddBtn) return;
   const count = selectedSet.size;
   selectedCountEl.textContent = count;
-  bulkAddBtn.disabled = count === 0;
-  bulkAddBtn.style.opacity = count === 0 ? '0.6' : '1';
-  
+
+  const alreadyAdded = Boolean(opts.alreadyAdded);
+  const disabled = count === 0 || alreadyAdded;
+  bulkAddBtn.disabled = disabled;
+  bulkAddBtn.style.opacity = disabled ? '0.6' : '1';
+
   if (selectAllCheckbox) {
     selectAllCheckbox.checked = allItems.length > 0 && selectedSet.size === allItems.length;
   }
+}
+
+// Build a stable signature combining a sorted selection set and detail levels
+export function buildSelectionSignature(selectedSet, levels) {
+  const sel = Array.from(selectedSet).sort().join('|');
+  const lvls = Array.from(levels).sort().join(',');
+  return `${sel}::${lvls}`;
 }
 
 export function syncCheckboxes(container, selector, dataAttr, selectedSet) {

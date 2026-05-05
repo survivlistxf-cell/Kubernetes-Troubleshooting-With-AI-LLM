@@ -18,11 +18,17 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class ChatAttachment {
 
+    private static final int MAX_CONVERSATION_ID_CHARS = 100;
+    private static final int MAX_FILE_NAME_CHARS = 255;
+    private static final int MAX_MIME_TYPE_CHARS = 120;
+    private static final int MAX_SHA256_CHARS = 64;
+    private static final int MAX_CONTENT_ENCODING_CHARS = 20;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "conversation_id", nullable = false, length = 100)
+    @Column(name = "conversation_id", nullable = false, length = MAX_CONVERSATION_ID_CHARS)
     private String conversationId;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -33,19 +39,19 @@ public class ChatAttachment {
     @JoinColumn(name = "user_id")
     private User user;
 
-    @Column(name = "file_name", nullable = false, length = 255)
+    @Column(name = "file_name", nullable = false, length = MAX_FILE_NAME_CHARS)
     private String fileName;
 
-    @Column(name = "mime_type", nullable = false, length = 120)
+    @Column(name = "mime_type", nullable = false, length = MAX_MIME_TYPE_CHARS)
     private String mimeType;
 
     @Column(name = "size_bytes", nullable = false)
     private Long sizeBytes;
 
-    @Column(name = "sha256", nullable = false, length = 64)
+    @Column(name = "sha256", nullable = false, length = MAX_SHA256_CHARS)
     private String sha256;
 
-    @Column(name = "content_encoding", nullable = false, length = 20)
+    @Column(name = "content_encoding", nullable = false, length = MAX_CONTENT_ENCODING_CHARS)
     private String contentEncoding; // "identity" | "gzip"
 
     // Large Object

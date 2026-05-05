@@ -1,11 +1,60 @@
 import { state } from './state.js';
-import { scanPods, podDetails } from './api.js';
-import { 
-  escapeHtml, prettyJson, updateBulkUIComponent, syncCheckboxes, createHelperButton 
+import { scanPods, podDetails, getClusterNamespaces } from './api.js';
+import {
+  escapeHtml, prettyJson, updateBulkUIComponent, syncCheckboxes, createHelperButton,
+  buildSelectionSignature
 } from './utils.js';
-import { addAttachment } from './attachments.js';
+import { addAttachment, replaceOrAddScanAttachment } from './attachments.js';
 import { switchToTab } from './navigation.js';
 import { getSelectedClusterId } from './clusters.js';
+import { savePodsScan, readSavedPodsScan, clearPodsScan } from './session.js';
+
+const PREDEFINED_NAMESPACES = ['default', 'kube-system', 'kube-public', 'kube-node-lease'];
+const NAMESPACE_STORAGE_KEY = 'kubexplain.lastNamespace';
+
+function getSelectedPodLevels() {
+  return Array.from(document.querySelectorAll('.pod-detail-level:checked')).map(cb => cb.value);
+}
+
+function populateNamespaceSelect(namespaces, preferredValue) {
+  const sel = document.getElementById('namespace-select');
+  if (!sel) return;
+  const merged = Array.from(new Set([...PREDEFINED_NAMESPACES, ...(namespaces || [])])).sort((a, b) => {
+    // keep `default` first, then alphabetical
+    if (a === 'default') return -1;
+    if (b === 'default') return 1;
+    return a.localeCompare(b);
+  });
+
+  const previous = preferredValue ?? sel.value;
+  sel.innerHTML = '';
+  merged.forEach(ns => {
+    const opt = document.createElement('option');
+    opt.value = ns;
+    opt.textContent = ns;
+    sel.appendChild(opt);
+  });
+
+  if (merged.includes(previous)) {
+    sel.value = previous;
+  } else {
+    sel.value = 'default';
+  }
+}
+
+async function refreshNamespacesForCluster(clusterId) {
+  if (!clusterId) {
+    populateNamespaceSelect([]);
+    return;
+  }
+  try {
+    const { resp, data } = await getClusterNamespaces(clusterId);
+    const list = (resp.ok && Array.isArray(data?.namespaces)) ? data.namespaces : [];
+    populateNamespaceSelect(list);
+  } catch {
+    populateNamespaceSelect([]);
+  }
+}
 
 function setActivePodTab(tab) {
   const buttons = Array.from(document.querySelectorAll('#pod-details-modal .pod-tab-btn'));
@@ -75,13 +124,44 @@ export function initPodsScanner() {
 
   let selectedPods = new Set(); // Stores pod names (or unique identifiers like ns/name)
 
+  function currentSignature() {
+    return buildSelectionSignature(selectedPods, getSelectedPodLevels());
+  }
+
+  function isAlreadyAdded() {
+    const last = state.lastPodBulkAdd;
+    if (!last) return false;
+    if (last.signature !== currentSignature()) return false;
+    // The previous attachment must still exist in the draft
+    return state.attachedFiles.some(f => f && f._scanContext && f.name === last.attachmentName);
+  }
+
   function updateUI() {
     updateBulkUIComponent(
       { bulkOptions, selectedCountEl, bulkAddBtn, selectAllCheckbox },
       selectedPods,
-      state.lastScannedPods || []
+      state.lastScannedPods || [],
+      { alreadyAdded: isAlreadyAdded() }
     );
+    syncRowSelectedClass();
   }
+
+  function syncRowSelectedClass() {
+    if (!podsList) return;
+    podsList.querySelectorAll('.pod-item').forEach(row => {
+      const cb = row.querySelector('.pod-item-checkbox');
+      const id = cb?.getAttribute('data-pod-id');
+      row.classList.toggle('is-selected', !!id && selectedPods.has(id));
+    });
+  }
+
+  // Detail-level checkboxes affect button enable/disable too
+  document.querySelectorAll('.pod-detail-level').forEach(cb => {
+    cb.addEventListener('change', () => updateUI());
+  });
+
+  // If the user removes the attachment pill from chat, re-enable the button
+  document.addEventListener('attachments:changed', () => updateUI());
 
   selectAllCheckbox?.addEventListener('change', (e) => {
     const checked = e.target.checked;
@@ -114,9 +194,30 @@ export function initPodsScanner() {
     });
   });
 
+  // Namespace select wiring: persist last value + auto-fetch when cluster changes
+  const namespaceSelect = document.getElementById('namespace-select');
+  const podsClusterSelect = document.getElementById('pods-cluster-select');
+
+  const savedNs = localStorage.getItem(NAMESPACE_STORAGE_KEY);
+  populateNamespaceSelect([], savedNs || 'default');
+
+  namespaceSelect?.addEventListener('change', () => {
+    if (namespaceSelect.value) localStorage.setItem(NAMESPACE_STORAGE_KEY, namespaceSelect.value);
+  });
+
+  podsClusterSelect?.addEventListener('change', () => {
+    const cid = getSelectedClusterId(podsClusterSelect);
+    refreshNamespacesForCluster(cid);
+  });
+
+  // Try to fetch namespaces once clusters become available
+  setTimeout(() => {
+    const cid = getSelectedClusterId(podsClusterSelect);
+    if (cid) refreshNamespacesForCluster(cid);
+  }, 600);
+
   scanBtn?.addEventListener('click', async () => {
-    const namespaceInput = document.getElementById('namespace-input');
-    const namespace = (namespaceInput?.value || 'default').trim() || 'default';
+    const namespace = (namespaceSelect?.value || 'default').trim() || 'default';
     const clusterSelect = document.getElementById('pods-cluster-select');
     const clusterId = getSelectedClusterId(clusterSelect);
 
@@ -141,86 +242,118 @@ export function initPodsScanner() {
     if (resp.ok) {
       const pods = data?.pods || [];
       state.lastScannedPods = pods;
+      renderPodsList(pods);
 
-      if (bulkOptions && pods.length > 0) {
-        bulkOptions.style.display = 'block';
-        generateDynamicHelpers(pods);
-      }
-
-      if (pods.length) {
-        pods.forEach(pod => {
-          const podId = `${pod.namespace}/${pod.name}`;
-          const podDiv = document.createElement('div');
-          podDiv.className = 'pod-item';
-          podDiv.style.display = 'flex';
-          podDiv.style.alignItems = 'flex-start';
-          podDiv.style.gap = '1rem';
-          
-          podDiv.innerHTML = `
-            <input type="checkbox" class="pod-item-checkbox" data-pod-id="${escapeHtml(podId)}" 
-                   style="width: 18px; height: 18px; margin-top: 0.5rem; accent-color: var(--yellow-green); flex-shrink: 0;"
-                   ${selectedPods.has(podId) ? 'checked' : ''}>
-            <div style="flex: 1;">
-              <h4>📦 ${escapeHtml(pod.name)}</h4>
-              <div class="pod-info">
-                <div class="pod-info-item"><span class="pod-info-label">Namespace:</span><span>${escapeHtml(pod.namespace)}</span></div>
-                <div class="pod-info-item"><span class="pod-info-label">Status:</span><span>${escapeHtml(pod.status)}</span></div>
-                <div class="pod-info-item"><span class="pod-info-label">Node:</span><span>${escapeHtml(pod.node || 'N/A')}</span></div>
-                <div class="pod-info-item"><span class="pod-info-label">Containers:</span><span>${escapeHtml(pod.containers)}</span></div>
-              </div>
-              <button class="btn-details" type="button" data-pod-namespace="${escapeHtml(pod.namespace)}" data-pod-name="${escapeHtml(pod.name)}">🔎 Details</button>
-            </div>
-          `;
-          podsList.appendChild(podDiv);
-
-          const cb = podDiv.querySelector('.pod-item-checkbox');
-          cb.addEventListener('change', (e) => {
-            if (e.target.checked) {
-              selectedPods.add(podId);
-            } else {
-              selectedPods.delete(podId);
-            }
-            updateBulkUI();
-          });
-        });
-
-        podsList.querySelectorAll('button.btn-details').forEach(btn => {
-          btn.addEventListener('click', async (ev) => {
-            const ns = ev.currentTarget?.dataset?.podNamespace;
-            const name = ev.currentTarget?.dataset?.podName;
-            const pod = (state.lastScannedPods || []).find(p => String(p.name) === String(name) && String(p.namespace) === String(ns)) || { namespace: ns, name };
-
-            state.selectedPodForDetails = { ...pod };
-            state.selectedPodDetailsPayload = {};
-
-            const titleEl = document.getElementById('pod-details-title');
-            if (titleEl) titleEl.textContent = `Pod details: ${ns}/${name}`;
-
-            renderPodDetailsMeta(pod, null);
-            setActivePodTab('describe');
-
-            // Clear all tab contents
-            document.getElementById('pod-details-describe').textContent = 'Loading details...';
-            document.getElementById('pod-details-json').textContent = '';
-            document.getElementById('pod-details-events').textContent = '';
-            document.getElementById('pod-details-logs').textContent = '';
-
-            openPodDetailsModal();
-            await loadPodTabDetails('describe');
-          });
-        });
-      } else {
-        podsList.innerHTML = '<p style="text-align: center; opacity: 0.7;">No Kubernetes pods found on this system.</p>';
-      }
+      // Persist for reload
+      savePodsScan({ pods, clusterId, namespace, ts: Date.now() });
     } else {
       const message = data?.error || data?.message || 'Could not scan for pods';
       podsList.innerHTML = `<p style="text-align: center; color: #d32f2f;">Error: ${escapeHtml(message)}</p>`;
       if (bulkOptions) bulkOptions.style.display = 'none';
+      clearPodsScan();
     }
 
     scanBtn.disabled = false;
     scanBtn.style.opacity = '1';
   });
+
+  function renderPodsList(pods) {
+    podsList.innerHTML = '';
+    if (bulkOptions && pods.length > 0) {
+      bulkOptions.style.display = 'block';
+      generateDynamicHelpers(pods);
+    }
+
+    if (!pods.length) {
+      podsList.innerHTML = '<p style="text-align: center; opacity: 0.7;">No Kubernetes pods found on this system.</p>';
+      return;
+    }
+
+    pods.forEach(pod => {
+      const podId = `${pod.namespace}/${pod.name}`;
+      const podDiv = document.createElement('div');
+      podDiv.className = 'pod-item';
+      podDiv.style.display = 'flex';
+      podDiv.style.alignItems = 'flex-start';
+      podDiv.style.gap = '1rem';
+
+      podDiv.innerHTML = `
+        <input type="checkbox" class="pod-item-checkbox" data-pod-id="${escapeHtml(podId)}"
+               style="width: 18px; height: 18px; margin-top: 0.5rem; accent-color: var(--yellow-green); flex-shrink: 0;"
+               ${selectedPods.has(podId) ? 'checked' : ''}>
+        <div style="flex: 1;">
+          <h4>📦 ${escapeHtml(pod.name)}</h4>
+          <div class="pod-info">
+            <div class="pod-info-item"><span class="pod-info-label">Namespace:</span><span>${escapeHtml(pod.namespace)}</span></div>
+            <div class="pod-info-item"><span class="pod-info-label">Status:</span><span>${escapeHtml(pod.status)}</span></div>
+            <div class="pod-info-item"><span class="pod-info-label">Node:</span><span>${escapeHtml(pod.node || 'N/A')}</span></div>
+            <div class="pod-info-item"><span class="pod-info-label">Containers:</span><span>${escapeHtml(pod.containers)}</span></div>
+          </div>
+          <button class="btn-details" type="button" data-pod-namespace="${escapeHtml(pod.namespace)}" data-pod-name="${escapeHtml(pod.name)}">🔎 Details</button>
+        </div>
+      `;
+      podsList.appendChild(podDiv);
+
+      const cb = podDiv.querySelector('.pod-item-checkbox');
+      cb.addEventListener('change', (e) => {
+        if (e.target.checked) selectedPods.add(podId);
+        else selectedPods.delete(podId);
+        updateUI();
+      });
+
+      podDiv.addEventListener('click', (ev) => {
+        if (ev.target.closest('button') || ev.target.closest('.pod-item-checkbox')) return;
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    });
+
+    podsList.querySelectorAll('button.btn-details').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        const ns = ev.currentTarget?.dataset?.podNamespace;
+        const name = ev.currentTarget?.dataset?.podName;
+        const pod = (state.lastScannedPods || []).find(p => String(p.name) === String(name) && String(p.namespace) === String(ns)) || { namespace: ns, name };
+
+        state.selectedPodForDetails = { ...pod };
+        state.selectedPodDetailsPayload = {};
+
+        const titleEl = document.getElementById('pod-details-title');
+        if (titleEl) titleEl.textContent = `Pod details: ${ns}/${name}`;
+
+        renderPodDetailsMeta(pod, null);
+        setActivePodTab('describe');
+
+        document.getElementById('pod-details-describe').textContent = 'Loading details...';
+        document.getElementById('pod-details-json').textContent = '';
+        document.getElementById('pod-details-events').textContent = '';
+        document.getElementById('pod-details-logs').textContent = '';
+
+        openPodDetailsModal();
+        await loadPodTabDetails('describe');
+      });
+    });
+
+    updateUI();
+  }
+
+  // Restore previous scan results on init
+  const saved = readSavedPodsScan();
+  if (saved && Array.isArray(saved.pods) && saved.pods.length) {
+    state.lastScannedPods = saved.pods;
+    state.activeClusterId = saved.clusterId || null;
+    if (saved.namespace && namespaceSelect) {
+      // Make sure the saved namespace is in the select options
+      if (![...namespaceSelect.options].some(o => o.value === saved.namespace)) {
+        const opt = document.createElement('option');
+        opt.value = saved.namespace;
+        opt.textContent = saved.namespace;
+        namespaceSelect.appendChild(opt);
+      }
+      namespaceSelect.value = saved.namespace;
+    }
+    scanResults.style.display = 'block';
+    renderPodsList(saved.pods);
+  }
 
   document.getElementById('pod-details-add-context')?.addEventListener('click', () => {
     if (!state.selectedPodForDetails) return;
@@ -250,8 +383,9 @@ export function initPodsScanner() {
   bulkAddBtn?.addEventListener('click', async () => {
     if (selectedPods.size === 0) return;
 
-    const levels = Array.from(document.querySelectorAll('.pod-detail-level:checked')).map(cb => cb.value);
-    
+    const levels = getSelectedPodLevels();
+    const signature = currentSignature();
+
     bulkAddBtn.disabled = true;
     bulkAddBtn.textContent = '⌛ Fetching details...';
 
@@ -263,7 +397,7 @@ export function initPodsScanner() {
       for (const pod of selectedPodList) {
         aggregatedContext += `--- POD: ${pod.namespace}/${pod.name} ---\n`;
         aggregatedContext += `Status: ${pod.status} | Node: ${pod.node || 'N/A'} | Ready: ${pod.ready} | Restarts: ${pod.restarts}\n`;
-        
+
         if (levels.length > 0) {
           const detailsResults = await Promise.all(levels.map(async lvl => {
             const { resp, data } = await podDetails(pod.namespace, pod.name, lvl, state.activeClusterId);
@@ -284,21 +418,23 @@ export function initPodsScanner() {
         aggregatedContext += '\n';
       }
 
-      addAttachment({ 
-        name: `bulk-pods-${selectedPodList.length}.txt`, 
-        size: aggregatedContext.length, 
-        type: 'text/plain', 
-        content: aggregatedContext, 
-        _scanContext: true 
-      });
+      const previousName = state.lastPodBulkAdd?.attachmentName;
+      const finalName = replaceOrAddScanAttachment({
+        name: `bulk-pods-${selectedPodList.length}.txt`,
+        size: aggregatedContext.length,
+        type: 'text/plain',
+        content: aggregatedContext,
+        _scanContext: true,
+      }, previousName);
+
+      state.lastPodBulkAdd = { signature, attachmentName: finalName };
       switchToTab('home');
     } catch (err) {
       console.error('Bulk fetch failed', err);
       alert('Failed to fetch some pod details. Check console.');
     } finally {
-      bulkAddBtn.disabled = false;
-      updateUI();
       bulkAddBtn.innerHTML = `<span>➕</span> Add context for <strong>${selectedPods.size}</strong> selected pods`;
+      updateUI();
     }
   });
 

@@ -4,6 +4,10 @@ import { openAttachmentPreviewFromFile, openAttachmentPreviewFromId } from './mo
 import { switchToTab } from './navigation.js';
 import { openResourcePicker } from './resourcePicker.js';
 
+// Client-side limits (mirror backend)
+const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024; // 2MB
+const MAX_ATTACHMENTS = 12;
+
 export function getFileIcon(name) {
   const ext = (String(name || '').split('.').pop() || '').toLowerCase();
   const map = {
@@ -111,20 +115,60 @@ function getUniqueFileName(name) {
   return uniqueName;
 }
 
+function notifyAttachmentsChanged() {
+  document.dispatchEvent(new CustomEvent('attachments:changed'));
+}
+
 export function addAttachment(fileObj) {
+  // Enforce client-side limits
+  if (!fileObj) return;
+  const size = typeof fileObj.size === 'number' ? fileObj.size : null;
+  if (size != null && size > MAX_ATTACHMENT_BYTES) {
+    alert(`Attachment "${fileObj.name}" is too large (limit ${formatFileSize(MAX_ATTACHMENT_BYTES)})`);
+    return;
+  }
+  if (state.attachedFiles.length >= MAX_ATTACHMENTS) {
+    alert(`Cannot attach more than ${MAX_ATTACHMENTS} files.`);
+    return;
+  }
+
   fileObj.name = getUniqueFileName(fileObj.name);
   state.attachedFiles.push(fileObj);
   updateAttachmentsPreview();
+  notifyAttachmentsChanged();
+}
+
+// Replace an existing scan-context attachment by name (if present); otherwise
+// just add it. Returns the final name used.
+export function replaceOrAddScanAttachment(fileObj, previousName) {
+  const idx = previousName
+    ? state.attachedFiles.findIndex(f => f && f._scanContext && f.name === previousName)
+    : -1;
+
+  let finalName;
+  if (idx >= 0) {
+    state.attachedFiles[idx] = { ...fileObj, name: previousName };
+    finalName = previousName;
+  } else {
+    fileObj.name = getUniqueFileName(fileObj.name);
+    state.attachedFiles.push(fileObj);
+    finalName = fileObj.name;
+  }
+  updateAttachmentsPreview();
+  notifyAttachmentsChanged();
+  return finalName;
 }
 
 export function clearDraftAttachments() {
   state.attachedFiles = [];
   updateAttachmentsPreview();
+  notifyAttachmentsChanged();
 }
 
 function removeAttachment(idx) {
   state.attachedFiles.splice(idx, 1);
   updateAttachmentsPreview();
+  notifyAttachmentsChanged();
 }
 
 export function updateAttachmentsPreview() {
@@ -197,7 +241,7 @@ export function initAttachments() {
 
     addAttachment({
       name: 'k8s-scan-context.txt',
-      size: text.length,
+      size: new Blob([text]).size,
       type: 'text/plain',
       content: text,
       _scanContext: true,
@@ -210,11 +254,27 @@ export function initAttachments() {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
 
+    if (state.attachedFiles.length >= MAX_ATTACHMENTS) {
+      alert(`Cannot attach more than ${MAX_ATTACHMENTS} files.`);
+      fileInput.value = '';
+      return;
+    }
+
     for (const f of files) {
+      if (f.size > MAX_ATTACHMENT_BYTES) {
+        alert(`File ${f.name} is too large (${formatFileSize(f.size)}). Limit is ${formatFileSize(MAX_ATTACHMENT_BYTES)}.`);
+        continue;
+      }
+      // Respect max attachments
+      if (state.attachedFiles.length >= MAX_ATTACHMENTS) {
+        alert(`Reached maximum attachments (${MAX_ATTACHMENTS}).`);
+        break;
+      }
+
       const content = await readFileAsText(f);
       addAttachment({
         name: f.name,
-        size: content.length,
+        size: f.size,
         type: f.type || 'text/plain',
         content,
       });

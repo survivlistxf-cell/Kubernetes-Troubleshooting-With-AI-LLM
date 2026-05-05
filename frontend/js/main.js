@@ -7,8 +7,14 @@ import { initPodsScanner } from './pods.js';
 import { initNodesScanner } from './nodes.js';
 import { initAuth } from './auth.js';
 import { initClusterManager } from './clusters.js';
+import { initTheme } from './theme.js';
+import { initUI } from './ui.js';
+import { initPreferences } from './preferences.js';
+import { restoreSession } from './session.js';
 
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
+  initPreferences();
   initAuth();
   initNavigation();
   initModals();
@@ -18,4 +24,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initPodsScanner();
   initNodesScanner();
   initClusterManager();
+  initUI();
+  restoreSession();
 });

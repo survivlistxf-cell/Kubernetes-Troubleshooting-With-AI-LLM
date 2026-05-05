@@ -6,17 +6,19 @@ Acest fisier inventariaza parametrii care influenteaza performanta/costul in pro
 
 Nota: sectiunea aceasta include doar limite exprimate in caractere (`substring`, `truncate`, `VARCHAR(n)`), nu limite in MB/secunde.
 
-- `10,000` caractere per artifact in prompt-ul catre LLM
-  - cod exact: `truncate(a.getContent(), 10000)`
+- `3,000` caractere per artifact in prompt-ul catre LLM
+  - cod exact: `MAX_ARTIFACT_PROMPT_CHARS = 3000`
+  - folosire: limiteaza cat din fiecare artifact intra in promptul final trimis la Ollama
   - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
 - `200` caractere din fiecare artifact folosite pentru query-ul de retrieval docs
-  - cod exact: `a.getContent().substring(0, 200)`
+  - cod exact: `MAX_RETRIEVAL_SNIPPET_CHARS = 200`
+  - folosire: pastreaza doar un fragment mic pentru cautarea in docs, ca semnal semantic
   - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
-- `15,000` caractere maxim pentru contextul total injectat din docs
-  - cod exact: `private static final int MAX_CONTEXT_CHARS = 15000;`
+ - `12,000` caractere maxim pentru contextul total injectat din docs
+  - cod exact: `private static final int MAX_CONTEXT_CHARS = 12000;`
   - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
-- `15,000` caractere maxim returnate dintr-un document in dynamic search
-  - cod exact: `return truncate(content, 15000);`
+- `10,000` caractere maxim returnate dintr-un document in dynamic search
+  - cod exact: `return truncate(content, MAX_DYNAMIC_DOC_CHARS);`
   - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
 - `20,000` caractere maxim salvate per document docs in DB (static/dynamic)
   - cod exact: `truncate(text, 20000)` si `truncate(content, 20000)`
@@ -36,6 +38,7 @@ Nota: sectiunea aceasta include doar limite exprimate in caractere (`substring`,
   - sursa: `init.sql`
 - `file_name`: `VARCHAR(255)`
   - sursa: `db_migrations/2026-03-03_add_chat_attachments.sql`
+  - folosire: numele fisierului atasat; limita este aliniata cu `MAX_FILE_NAME_CHARS = 255`
 - `mime_type`: `VARCHAR(120)`
   - sursa: `db_migrations/2026-03-03_add_chat_attachments.sql`
 - `sha256`: `VARCHAR(64)`
@@ -117,16 +120,25 @@ Nota: sectiunea aceasta include doar limite exprimate in caractere (`substring`,
   - sursa: `backend/src/main/java/com/example/services/AttachmentService.java`
 - `kubectl logs` preluat in detalii: `--tail=200`
   - sursa: `backend/src/main/java/com/example/controllers/PodsController.java`
-- limita text artifact in prompt (per artifact): `10,000` caractere
+- limita text mesaj utilizator (request chat): `4000` caractere
+  - sursa: `backend/src/main/java/com/example/entities/Chat.java`
+  - folosire: opreste mesaje foarte lungi inainte sa ajunga in DB sau in prompt
+- limita text artifact in prompt (per artifact): `3,000` caractere
   - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
-- max artifacts incluse in prompt per request: `10`
+  - folosire: lasa loc in prompt pentru istoric si docs, fara sa explodeze contextul
+- max artifacts incluse in prompt per request: `5`
   - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
-- context docs injectat in prompt: `MAX_CONTEXT_CHARS = 15,000`
+  - folosire: limiteaza cate dovezi brute intra intr-un singur request
+- limita `artifact.content` acceptata de protocol: `10,000` caractere
+  - sursa: `Server/src/main/java/com/kdiag/server/protocol/KdiagModels.java`
+  - folosire: respinge payload-uri prea mari inainte de procesare
+- context docs injectat in prompt: `MAX_CONTEXT_CHARS = 12,000`
   - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
+  - folosire: taie contextul din docs la o marime care ramane utila pentru LLM
 - text doc salvat in DB la scrape static/dinamic: trunchiat la `20,000` caractere
   - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
   - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
-- text doc returnat din dynamic search catre LLM: trunchiat la `15,000` caractere
+- text doc returnat din dynamic search catre LLM: trunchiat la `10,000` caractere
   - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
 - snippet extras din artifact pentru query semantic docs: max `200` caractere/artifact
   - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
@@ -150,13 +162,12 @@ Nota: sectiunea aceasta include doar limite exprimate in caractere (`substring`,
 ## 3) Context conversațional (istoric/memorie)
 
 - AI history este in-memory (`ConcurrentHashMap<String, List<HistoryEntry>>`)
-  - **nu exista limita explicita** pe:
-    - numar conversatii active
-    - numar mesaje per conversatie
-    - lungime mesaj
+  - raw history este limitat la ultimele `12` mesaje brute per conversatie
+  - la `10` mesaje brute se declanseaza in fundal o sumarizare rulanta
+  - rezumatul conversatiei este pastrat separat si este injectat in promptul curent
   - sursa: `Server/src/main/java/com/kdiag/server/ai/history/HistoryService.java`
 - In `AiEngine`, pentru conversatiile cu `conversationId`, se trimit in LLM toate entry-urile din history + mesajul de sistem
-  - **fara clipping/fereastra maxima**
+  - cu un rezumat compact al conversatiei + mesajele brute recente
   - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
 - In backend, contextele persistate (`conversation_context`) se curata dupa `30 zile`
   - sursa: `backend/src/main/java/com/example/services/RetentionCleanupJob.java`
@@ -209,13 +220,13 @@ Nota: sectiunea aceasta include doar limite exprimate in caractere (`substring`,
 
 - `fetch()` din frontend fara timeout custom
   - sursa: `frontend/js/api.js`
-- `RestTemplate` backend->AI fara connect/read timeout setat explicit
+- [x] `RestTemplate` backend->AI has explicit connect/read timeouts (3s/65s)
   - sursa: `backend/src/main/java/com/example/services/AiForwardingService.java`
-- `HistoryService` in-memory fara cap de dimensiune
+- `HistoryService` in-memory cu raw history limitat + summary rulant
   - sursa: `Server/src/main/java/com/kdiag/server/ai/history/HistoryService.java`
 - protocol model (`KdiagModels`) fara `@Size` pe campuri text/artifacts
   - sursa: `Server/src/main/java/com/kdiag/server/protocol/KdiagModels.java`
-- frontend permite atasare fisiere text fara limita client-side (se citeste complet in memorie)
+- [x] frontend enforces client-side attachment limits (<=2MB per file, max 12 files)
   - sursa: `frontend/js/attachments.js`
 
 ## 7) Rezumat rapid (valorile maxime principale)
@@ -224,9 +235,11 @@ Nota: sectiunea aceasta include doar limite exprimate in caractere (`substring`,
 - Max upload AI server: `10MB`/fisier, `10MB`/request
 - Max atasament persistat: `2MB`
 - Max atasamente/mesaj: `12`
-- Max artifacte incluse in prompt: `10`
-- Max text per artifact in prompt: `10,000` chars
-- Max context docs injectat: `15,000` chars
+- Max mesaje brute in history: `12`
+- Prag pornire sumarizare: `10`
+- Max artifacte incluse in prompt: `5`
+- Max text per artifact in prompt: `3,000` chars
+- Max context docs injectat: `12,000` chars
 - Max pagini statice in context: `3`
 - Max rezultate dynamic search: `2`
 - Ollama timeout: `60s`
@@ -235,7 +248,7 @@ Nota: sectiunea aceasta include doar limite exprimate in caractere (`substring`,
 
 ## 8) Observatie
 
-Interpretare importanta: exista limite bune pe upload/attachments si pe context RAG, dar exista inca 3 zone ne-limiate care pot degrada performanta la volum mare:
-- history in-memory ne-bounded,
-- lipsa timeout explicit pe `RestTemplate`,
-- lipsa limitelor de marime la nivel protocol (`@Size`) si frontend attach.
+Interpretare importanta: majoritatea limitelor mari sunt acum explicate si puse in constante la nivel de clasa; ramane de urmarit in special:
+- history in-memory fara cap global,
+- cresterea bugetului total de prompt catre LLM,
+- lungimea surselor dinamice daca apar doc-uri neobisnuit de mari.

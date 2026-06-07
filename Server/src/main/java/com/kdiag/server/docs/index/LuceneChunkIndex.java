@@ -43,7 +43,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 @Component
-public class LuceneChunkIndex {
+public class LuceneChunkIndex implements ChunkRetriever {
 
     private static final Logger logger = LoggerFactory.getLogger(LuceneChunkIndex.class);
 
@@ -262,10 +262,12 @@ public class LuceneChunkIndex {
      * Returns the top-K matching {@link DocChunk}s ranked by BM25 score.
      */
     public List<DocChunk> search(String queryText, int topK) {
+        long start = System.currentTimeMillis();
         List<DocChunk> result = searchScored(queryText, topK).stream()
                 .map(ScoredChunk::chunk)
                 .collect(Collectors.toList());
         metrics.recordBm25Search(result.isEmpty(), false);
+        metrics.recordRetrievalSearch("lucene", System.currentTimeMillis() - start, result.size());
         return result;
     }
 
@@ -279,9 +281,10 @@ public class LuceneChunkIndex {
      */
     public List<DocChunk> search(String queryText, int topK, Set<String> boostedUrls) {
         if (boostedUrls == null || boostedUrls.isEmpty()) {
-            // Delegate — recordBm25Search is called inside search(String, int) with boosted=false
+            // Delegate — recordBm25Search and recordRetrievalSearch are called inside
             return search(queryText, topK);
         }
+        long start = System.currentTimeMillis();
         List<ScoredChunk> candidates = searchScored(queryText, topK * 2);
         List<ScoredChunk> adjusted = new ArrayList<>(candidates.size());
         for (ScoredChunk sc : candidates) {
@@ -297,6 +300,7 @@ public class LuceneChunkIndex {
                 queryText.length() > 80 ? queryText.substring(0, 80) : queryText,
                 candidates.size(), results.size(), boostedUrls.size());
         metrics.recordBm25Search(results.isEmpty(), true);
+        metrics.recordRetrievalSearch("lucene", System.currentTimeMillis() - start, results.size());
         return results;
     }
 

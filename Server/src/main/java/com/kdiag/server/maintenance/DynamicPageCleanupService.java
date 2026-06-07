@@ -1,11 +1,12 @@
 package com.kdiag.server.maintenance;
 
-import com.kdiag.server.docs.index.LuceneChunkIndex;
+import com.kdiag.server.docs.index.ChunkRetriever;
 import com.kdiag.server.metrics.MetricsCollector;
 import com.kdiag.server.repositories.KubernetesDocPageRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -23,7 +24,7 @@ import java.util.List;
  *   <li>its URL does not appear in any positively-rated {@code problem_resolutions} row.</li>
  * </ul>
  *
- * <p>After deleting rows from {@code kubernetes_doc_pages} the Lucene orphan-chunk
+ * <p>After deleting rows from {@code kubernetes_doc_pages} the active retriever's
  * garbage collector is run so the index stays consistent with the database.
  */
 @Service
@@ -41,15 +42,15 @@ public class DynamicPageCleanupService {
     private boolean dryRun;
 
     private final KubernetesDocPageRepository pageRepo;
-    private final LuceneChunkIndex luceneIndex;
+    private final ChunkRetriever chunkRetriever;
     private final MetricsCollector metrics;
 
     public DynamicPageCleanupService(KubernetesDocPageRepository pageRepo,
-                                     LuceneChunkIndex luceneIndex,
+                                     @Qualifier("activeChunkRetriever") ChunkRetriever chunkRetriever,
                                      MetricsCollector metrics) {
-        this.pageRepo    = pageRepo;
-        this.luceneIndex = luceneIndex;
-        this.metrics     = metrics;
+        this.pageRepo       = pageRepo;
+        this.chunkRetriever = chunkRetriever;
+        this.metrics        = metrics;
     }
 
     // -------------------------------------------------------------------------
@@ -97,8 +98,8 @@ public class DynamicPageCleanupService {
         int deleted = 0;
         if (!dryRunOverride) {
             deleted = pageRepo.deleteByIds(ids);
-            luceneIndex.forceGarbageCollect();
-            logger.info("Dynamic cleanup: deleted {} pages, ran Lucene GC", deleted);
+            chunkRetriever.forceGarbageCollect();
+            logger.info("Dynamic cleanup: deleted {} pages, ran index GC", deleted);
         } else {
             logger.info("Dynamic cleanup DRY-RUN: would delete {} pages", ids.size());
         }

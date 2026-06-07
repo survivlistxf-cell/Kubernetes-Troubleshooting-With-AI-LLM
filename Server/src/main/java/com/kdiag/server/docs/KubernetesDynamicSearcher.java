@@ -1,6 +1,6 @@
 package com.kdiag.server.docs;
 
-import com.kdiag.server.docs.index.LuceneChunkIndex;
+import com.kdiag.server.docs.index.ChunkRetriever;
 import com.kdiag.server.entities.KubernetesDocPage;
 import com.kdiag.server.entities.ProblemResolution;
 import com.kdiag.server.repositories.KubernetesDocPageRepository;
@@ -9,6 +9,7 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,14 +34,14 @@ public class KubernetesDynamicSearcher {
 
     private final KubernetesDocPageRepository docRepository;
     private final ProblemResolutionRepository resolutionRepository;
-    private final LuceneChunkIndex luceneChunkIndex;
+    private final ChunkRetriever chunkRetriever;
 
     public KubernetesDynamicSearcher(KubernetesDocPageRepository docRepository,
                                      ProblemResolutionRepository resolutionRepository,
-                                     LuceneChunkIndex luceneChunkIndex) {
+                                     @Qualifier("activeChunkRetriever") ChunkRetriever chunkRetriever) {
         this.docRepository = docRepository;
         this.resolutionRepository = resolutionRepository;
-        this.luceneChunkIndex = luceneChunkIndex;
+        this.chunkRetriever = chunkRetriever;
     }
 
     /**
@@ -134,7 +135,7 @@ public class KubernetesDynamicSearcher {
 
             KubernetesDocPage page = new KubernetesDocPage(url, title, content, true);
             docRepository.save(page);
-            luceneChunkIndex.indexPage(page);
+            chunkRetriever.indexPage(page);
 
             // For dynamic inclusion, deduplicate and cap the snippet to avoid sending huge prompts
             String deduped = dedupeParagraphs(content, MAX_DYNAMIC_DOC_CHARS);

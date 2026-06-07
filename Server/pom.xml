@@ -122,6 +122,24 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-cache</artifactId>
         </dependency>
+
+        <!--
+            ElasticSearch Java client (official, co.elastic.clients).
+            Used only by ElasticChunkRetriever when kdiag.retrieval.engine=elastic.
+            Version 8.13.x matches the elasticsearch:8.13.x Docker image.
+            Chosen over Spring Data Elasticsearch because it gives full control
+            over the hybrid BM25+kNN (RRF) query DSL introduced in ES 8.9+.
+        -->
+        <dependency>
+            <groupId>co.elastic.clients</groupId>
+            <artifactId>elasticsearch-java</artifactId>
+            <version>8.13.4</version>
+        </dependency>
+        <!-- jakarta.json-api is required by the ES Java client transport layer -->
+        <dependency>
+            <groupId>jakarta.json</groupId>
+            <artifactId>jakarta.json-api</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

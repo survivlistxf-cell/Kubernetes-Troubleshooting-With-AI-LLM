@@ -63,6 +63,16 @@ public class MetricsCollector {
     private final AtomicLong numCtxOverflowsApprox = new AtomicLong();
 
     // =========================================================================
+    // Retrieval engine comparison (lucene vs elastic)
+    // =========================================================================
+    private final AtomicLong luceneRetrievalCalls    = new AtomicLong();
+    private final AtomicLong luceneRetrievalHits     = new AtomicLong();
+    private final AtomicLong luceneRetrievalTotalMs  = new AtomicLong();
+    private final AtomicLong elasticRetrievalCalls   = new AtomicLong();
+    private final AtomicLong elasticRetrievalHits    = new AtomicLong();
+    private final AtomicLong elasticRetrievalTotalMs = new AtomicLong();
+
+    // =========================================================================
     // Dynamic-page cleanup
     // =========================================================================
     private final AtomicLong cleanupRunsTotal      = new AtomicLong();
@@ -148,6 +158,25 @@ public class MetricsCollector {
         }
     }
 
+    /**
+     * Called after each retrieval search to track latency and hit-rate per engine.
+     *
+     * @param engine one of {@code "lucene"} or {@code "elastic"}
+     * @param ms     wall-clock milliseconds for the search call
+     * @param hits   number of chunks returned (0 = empty result)
+     */
+    public void recordRetrievalSearch(String engine, long ms, int hits) {
+        if ("elastic".equalsIgnoreCase(engine)) {
+            elasticRetrievalCalls.incrementAndGet();
+            elasticRetrievalTotalMs.addAndGet(ms);
+            if (hits > 0) elasticRetrievalHits.incrementAndGet();
+        } else {
+            luceneRetrievalCalls.incrementAndGet();
+            luceneRetrievalTotalMs.addAndGet(ms);
+            if (hits > 0) luceneRetrievalHits.incrementAndGet();
+        }
+    }
+
     /** Called after each cleanup run (scheduled or manual). */
     public void recordCleanupRun(int deletedCount, long durationMs, boolean dryRun) {
         cleanupRunsTotal.incrementAndGet();
@@ -204,6 +233,14 @@ public class MetricsCollector {
         m.put("cleanupLastDurationMs", cleanupLastDurationMs.get());
         m.put("cleanupLastRunAt",      cleanupLastRunAt != null ? cleanupLastRunAt.toString() : null);
         m.put("cleanupLastRunDryRun",  cleanupLastRunDryRun);
+
+        // --- raw counters: retrieval engine comparison ---
+        m.put("luceneRetrievalCalls",    luceneRetrievalCalls.get());
+        m.put("luceneRetrievalHits",     luceneRetrievalHits.get());
+        m.put("luceneRetrievalTotalMs",  luceneRetrievalTotalMs.get());
+        m.put("elasticRetrievalCalls",   elasticRetrievalCalls.get());
+        m.put("elasticRetrievalHits",    elasticRetrievalHits.get());
+        m.put("elasticRetrievalTotalMs", elasticRetrievalTotalMs.get());
 
         // --- derived metrics ---
         try {
@@ -265,6 +302,12 @@ public class MetricsCollector {
         cleanupLastDurationMs.set(0);
         cleanupLastRunAt     = null;
         cleanupLastRunDryRun = null;
+        luceneRetrievalCalls.set(0);
+        luceneRetrievalHits.set(0);
+        luceneRetrievalTotalMs.set(0);
+        elasticRetrievalCalls.set(0);
+        elasticRetrievalHits.set(0);
+        elasticRetrievalTotalMs.set(0);
     }
 
     // =========================================================================

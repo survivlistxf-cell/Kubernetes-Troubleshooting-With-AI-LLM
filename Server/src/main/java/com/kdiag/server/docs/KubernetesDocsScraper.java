@@ -1,13 +1,14 @@
 package com.kdiag.server.docs;
 
+import com.kdiag.server.docs.index.ChunkRetriever;
 import com.kdiag.server.docs.index.DocChunk;
-import com.kdiag.server.docs.index.LuceneChunkIndex;
 import com.kdiag.server.entities.KubernetesDocPage;
 import com.kdiag.server.repositories.KubernetesDocPageRepository;
 import jakarta.annotation.PostConstruct;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 import org.slf4j.Logger;
@@ -49,7 +50,7 @@ public class KubernetesDocsScraper {
     );
 
     private final KubernetesDocPageRepository repository;
-    private final LuceneChunkIndex luceneChunkIndex;
+    private final ChunkRetriever chunkRetriever;
     private final RestTemplate restTemplate;
 
     private Set<String> stopWords = new HashSet<>();
@@ -63,10 +64,11 @@ public class KubernetesDocsScraper {
             "https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/",
             "https://kubernetes.io/docs/tasks/debug/debug-cluster/");
 
-    public KubernetesDocsScraper(KubernetesDocPageRepository repository, LuceneChunkIndex luceneChunkIndex) {
-        this.repository = repository;
-        this.luceneChunkIndex = luceneChunkIndex;
-        this.restTemplate = new RestTemplate();
+    public KubernetesDocsScraper(KubernetesDocPageRepository repository,
+                                 @Qualifier("activeChunkRetriever") ChunkRetriever chunkRetriever) {
+        this.repository     = repository;
+        this.chunkRetriever = chunkRetriever;
+        this.restTemplate   = new RestTemplate();
     }
 
     private void ensureStopwordsLoaded() {
@@ -126,7 +128,7 @@ public class KubernetesDocsScraper {
 
                     KubernetesDocPage page = new KubernetesDocPage(url, title, text, false);
                     repository.save(page);
-                    luceneChunkIndex.indexPage(page);
+                    chunkRetriever.indexPage(page);
                 } catch (Exception e) {
                     logger.error("Failed to fetch static doc {}", url, e);
                 }
@@ -164,7 +166,7 @@ public class KubernetesDocsScraper {
      * fall back to {@link #getRelevantDocs(String)}.
      */
     public String getRelevantDocsByBm25(String userMessage, int maxContextChars) {
-        List<DocChunk> chunks = luceneChunkIndex.search(userMessage, 12);
+        List<DocChunk> chunks = chunkRetriever.search(userMessage, 12);
         if (chunks.isEmpty()) return "";
         return assembleContext(chunks, maxContextChars);
     }
@@ -180,7 +182,7 @@ public class KubernetesDocsScraper {
      */
     public String getRelevantDocsByBm25Boosted(String userMessage, int maxContextChars,
                                                Set<String> boostedUrls) {
-        List<DocChunk> chunks = luceneChunkIndex.search(userMessage, 12, boostedUrls);
+        List<DocChunk> chunks = chunkRetriever.search(userMessage, 12, boostedUrls);
         if (chunks.isEmpty()) return "";
         return assembleContext(chunks, maxContextChars);
     }
@@ -308,7 +310,7 @@ public class KubernetesDocsScraper {
                 page.setTitle(title);
                 page.setLastScraped(LocalDateTime.now());
                 repository.save(page);
-                luceneChunkIndex.indexPage(page);
+                chunkRetriever.indexPage(page);
                 refreshed++;
 
                 Thread.sleep(1000); // rate limit: 1 req/second

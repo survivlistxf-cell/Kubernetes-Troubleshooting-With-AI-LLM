@@ -1,6 +1,6 @@
 package com.kdiag.server.maintenance;
 
-import com.kdiag.server.docs.index.LuceneChunkIndex;
+import com.kdiag.server.docs.index.ChunkRetriever;
 import com.kdiag.server.metrics.MetricsCollector;
 import com.kdiag.server.repositories.KubernetesDocPageRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,14 +20,14 @@ import static org.mockito.Mockito.*;
 class DynamicPageCleanupServiceTest {
 
     @Mock KubernetesDocPageRepository pageRepo;
-    @Mock LuceneChunkIndex            luceneIndex;
+    @Mock ChunkRetriever              chunkRetriever;
     @Mock MetricsCollector            metrics;
 
     private DynamicPageCleanupService service;
 
     @BeforeEach
     void setUp() {
-        service = new DynamicPageCleanupService(pageRepo, luceneIndex, metrics);
+        service = new DynamicPageCleanupService(pageRepo, chunkRetriever, metrics);
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "ageDays",  30);
         ReflectionTestUtils.setField(service, "dryRun",   false);
@@ -50,7 +50,7 @@ class DynamicPageCleanupServiceTest {
 
         verify(pageRepo).findStaleDynamicPages(any());
         verify(pageRepo, never()).deleteByIds(any());
-        verify(luceneIndex, never()).forceGarbageCollect();
+        verify(chunkRetriever, never()).forceGarbageCollect();
         assertEquals(3, result.candidates());
         assertEquals(0, result.deleted());
         assertTrue(result.dryRun());
@@ -68,7 +68,7 @@ class DynamicPageCleanupServiceTest {
         DynamicPageCleanupService.CleanupResult result = service.runCleanup(false);
 
         verify(pageRepo, never()).deleteByIds(any());
-        verify(luceneIndex, never()).forceGarbageCollect();
+        verify(chunkRetriever, never()).forceGarbageCollect();
         verify(metrics).recordCleanupRun(eq(0), anyLong(), eq(false));
         assertEquals(0, result.candidates());
         assertEquals(0, result.deleted());
@@ -76,7 +76,7 @@ class DynamicPageCleanupServiceTest {
     }
 
     // -----------------------------------------------------------------------
-    // Test 3: real run with candidates — deletes rows and runs Lucene GC
+    // Test 3: real run with candidates — deletes rows and runs index GC
     // -----------------------------------------------------------------------
 
     @Test
@@ -87,12 +87,12 @@ class DynamicPageCleanupServiceTest {
         );
         when(pageRepo.findStaleDynamicPages(any())).thenReturn(fakeCandidates);
         when(pageRepo.deleteByIds(any())).thenReturn(2);
-        when(luceneIndex.forceGarbageCollect()).thenReturn(50);
+        when(chunkRetriever.forceGarbageCollect()).thenReturn(50);
 
         DynamicPageCleanupService.CleanupResult result = service.runCleanup(false);
 
         verify(pageRepo).deleteByIds(List.of(10L, 20L));
-        verify(luceneIndex).forceGarbageCollect();
+        verify(chunkRetriever).forceGarbageCollect();
         verify(metrics).recordCleanupRun(eq(2), anyLong(), eq(false));
         assertEquals(2, result.candidates());
         assertEquals(2, result.deleted());
@@ -109,6 +109,6 @@ class DynamicPageCleanupServiceTest {
 
         service.scheduledCleanup();
 
-        verifyNoInteractions(pageRepo, luceneIndex, metrics);
+        verifyNoInteractions(pageRepo, chunkRetriever, metrics);
     }
 }

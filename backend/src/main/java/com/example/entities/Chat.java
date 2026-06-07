@@ -14,7 +14,7 @@ import lombok.NoArgsConstructor;
 public class Chat {
 
     private static final int MAX_CONVERSATION_ID_CHARS = 100;
-    private static final int MAX_USER_MESSAGE_CHARS = 4000;
+    private static final int MAX_USER_MESSAGE_CHARS = 16000;
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

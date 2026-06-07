@@ -19,13 +19,24 @@
 
     <properties>
         <java.version>17</java.version>
+        <!-- Silences the "Using platform encoding" warning from maven-resources-plugin
+             so the build is reproducible across machines / locales. -->
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     </properties>
 
     <dependencies>
-        <!-- Spring Boot Web -->
+        <!-- Spring Boot Web (servlet / Tomcat) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- WebFlux — brings in WebClient + reactor-core for streaming SSE proxy.
+             Spring Boot uses Tomcat (servlet mode) when both web and webflux are present. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
         </dependency>
 
         <!-- Spring Boot Data JPA -->
@@ -124,6 +135,10 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
+                    <!-- Silences the native-access JVM warning emitted by Tomcat
+                         (tomcat-jni) on JDK 22+, and suppresses Netty's
+                         sun.misc.Unsafe deprecation noise when running spring-boot:run. -->
+                    <jvmArguments>--enable-native-access=ALL-UNNAMED</jvmArguments>
                     <excludes>
                         <exclude>
                             <groupId>org.projectlombok</groupId>

@@ -3,11 +3,17 @@ package com.example.controllers;
 import com.example.entities.ClusterConfig;
 import com.example.repositories.ClusterConfigRepository;
 import com.example.services.KubectlService;
+import com.example.utils.Utils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @RestController
 @RequestMapping("/api")
@@ -23,15 +29,9 @@ public class NodesController {
         this.clusterRepo = clusterRepo;
     }
 
-    /** Build kubectl prefix args for a cluster, or default */
+    /** Wrapper kept for call-site readability — delegates to {@link KubectlService#kubectlBase(Long)}. */
     private List<String> kubectlBase(Long clusterId) {
-        if (clusterId != null) {
-            Optional<ClusterConfig> opt = clusterRepo.findById(clusterId);
-            if (opt.isPresent()) {
-                return kubectl.buildKubectlPrefix(opt.get());
-            }
-        }
-        return new ArrayList<>(Arrays.asList("kubectl", "--kubeconfig", kubectl.resolveKubeconfigPath()));
+        return kubectl.kubectlBase(clusterId);
     }
 
     @GetMapping("/scan-nodes")
@@ -109,6 +109,56 @@ public class NodesController {
         }
 
         return result;
+    }
+
+    @GetMapping("/scan-nodes/multi")
+    public ResponseEntity<?> scanNodesMulti(@RequestParam(name = "clusterIds") String clusterIds) {
+        List<Long> ids = Utils.parseClusterIds(clusterIds);
+        if (ids.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "clusterIds is required"));
+        }
+        if (ids.size() > Utils.MAX_MULTI_CLUSTERS) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Maximum " + Utils.MAX_MULTI_CLUSTERS + " clusters allowed per multi-scan"));
+        }
+
+        List<CompletableFuture<Map<String, Object>>> futures = new ArrayList<>();
+        for (Long id : ids) {
+            futures.add(CompletableFuture.supplyAsync(() -> scanNodesForCluster(id)));
+        }
+
+        List<Map<String, Object>> results = new ArrayList<>();
+        for (int i = 0; i < futures.size(); i++) {
+            try {
+                results.add(futures.get(i).get(20, TimeUnit.SECONDS));
+            } catch (InterruptedException | ExecutionException | TimeoutException e) {
+                results.add(Map.of(
+                        "clusterId", ids.get(i),
+                        "success", false,
+                        "error", "Scan timed out or failed: " + e.getMessage(),
+                        "nodes", List.of()));
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        return ResponseEntity.ok(Map.of("results", results));
+    }
+
+    private Map<String, Object> scanNodesForCluster(Long clusterId) {
+        Optional<ClusterConfig> opt = clusterRepo.findById(clusterId);
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("clusterId", clusterId);
+        if (opt.isEmpty()) {
+            entry.put("success", false);
+            entry.put("error", "Cluster not found");
+            entry.put("nodes", List.of());
+            return entry;
+        }
+        entry.put("clusterName", opt.get().getName());
+        entry.put("clusterDisplayName", opt.get().getDisplayName());
+        Map<String, Object> scan = scanNodes(clusterId);
+        entry.putAll(scan);
+        return entry;
     }
 
     @GetMapping("/node-details")

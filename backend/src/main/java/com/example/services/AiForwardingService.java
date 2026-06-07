@@ -1,11 +1,17 @@
 package com.example.services;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.*;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.*;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,6 +31,12 @@ public class AiForwardingService {
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    // Lazy WebClient for streaming — initialised on first use so it picks up the
+    // injected aiServerBaseUrl (which is @Value-injected after construction).
+    @Autowired
+    private WebClient.Builder webClientBuilder;
+    private volatile WebClient streamingWebClient;
 
     @Value("${ai.server.base-url:http://localhost:8090}")
     private String aiServerBaseUrl;
@@ -163,6 +175,67 @@ public class AiForwardingService {
 
     public String extractHttpErrorCode(String response) {
         return response.substring("__AI_HTTP_ERROR__".length());
+    }
+
+    // -------------------------------------------------------------------------
+    // Streaming SSE proxy
+    // -------------------------------------------------------------------------
+
+    /**
+     * Forwards the user request to the AI server's SSE streaming endpoint
+     * ({@code POST /v1/chat/stream}) and returns the event stream verbatim.
+     *
+     * <p>On any connection/timeout error a single {@code error} SSE event is emitted
+     * so the caller always receives a terminal event.
+     */
+    public Flux<ServerSentEvent<String>> forwardStream(
+            String userMessage, Object attachmentsObj, String conversationId, String requestId) {
+        try {
+            List<Map<String, Object>> artifacts = processIncomingAttachments(attachmentsObj, requestId);
+
+            Map<String, Object> messageObj = Map.of("role", "user", "text", userMessage);
+            Map<String, Object> kdiag = (artifacts == null || artifacts.isEmpty())
+                    ? Map.of("protocol_version", "kdiag/1.0",
+                             "conversation_id", conversationId,
+                             "message", messageObj)
+                    : Map.of("protocol_version", "kdiag/1.0",
+                             "conversation_id", conversationId,
+                             "message", messageObj,
+                             "artifacts", artifacts);
+
+            return getStreamingWebClient().post()
+                    .uri(aiServerBaseUrl + "/v1/chat/stream")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.TEXT_EVENT_STREAM)
+                    .bodyValue(kdiag)
+                    .retrieve()
+                    .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
+                    .timeout(Duration.ofSeconds(120))
+                    .onErrorResume(e -> {
+                        logger.error("[{}] SSE stream forward failed", requestId, e);
+                        return Flux.just(ServerSentEvent.<String>builder()
+                                .event("error")
+                                .data("AI server streaming unavailable: " + e.getMessage())
+                                .build());
+                    });
+        } catch (Exception e) {
+            logger.error("[{}] SSE stream setup failed", requestId, e);
+            return Flux.just(ServerSentEvent.<String>builder()
+                    .event("error")
+                    .data("Stream setup failed: " + e.getMessage())
+                    .build());
+        }
+    }
+
+    private WebClient getStreamingWebClient() {
+        if (streamingWebClient == null) {
+            synchronized (this) {
+                if (streamingWebClient == null) {
+                    streamingWebClient = webClientBuilder.build();
+                }
+            }
+        }
+        return streamingWebClient;
     }
 
     // Handle-uieste raspunsul LLM-ului

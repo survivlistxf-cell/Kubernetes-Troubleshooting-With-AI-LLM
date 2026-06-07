@@ -1,5 +1,11 @@
 -- Initialize PostgreSQL database with schema for Kubexplain
 
+-- Required extensions
+-- pgvector is needed by the qa_feedback.embedding column (vector(768)).  Must run
+-- BEFORE Hibernate's automatic schema update, otherwise the AI server logs
+-- `type "vector" does not exist` on first boot and the table is never created.
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
@@ -73,6 +79,25 @@ CREATE TABLE IF NOT EXISTS cluster_configs (
 
 CREATE INDEX IF NOT EXISTS idx_cluster_name ON cluster_configs(name);
 CREATE INDEX IF NOT EXISTS idx_cluster_active ON cluster_configs(is_active);
+
+-- Cluster links (auto-detected by CRD inspection — Submariner, Linkerd multicluster)
+CREATE TABLE IF NOT EXISTS cluster_links (
+    id BIGSERIAL PRIMARY KEY,
+    source_cluster_id BIGINT NOT NULL REFERENCES cluster_configs(id) ON DELETE CASCADE,
+    target_cluster_id BIGINT NOT NULL REFERENCES cluster_configs(id) ON DELETE CASCADE,
+    link_type VARCHAR(50) NOT NULL,           -- mesh | tunnel | ...
+    source VARCHAR(50),                        -- detector: submariner | linkerd
+    last_test_status VARCHAR(20),             -- unknown | connected | failed | testing
+    last_test_at TIMESTAMP,
+    last_test_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT cluster_links_no_self CHECK (source_cluster_id <> target_cluster_id),
+    CONSTRAINT cluster_links_unique UNIQUE (source_cluster_id, target_cluster_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cluster_links_source ON cluster_links(source_cluster_id);
+CREATE INDEX IF NOT EXISTS idx_cluster_links_target ON cluster_links(target_cluster_id);
 
 -- Sample data (optional, for testing)
 -- Uncomment to seed initial data>

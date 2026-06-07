@@ -1,254 +1,327 @@
-# Metrici de eficienta extrase din cod
+# Metrici de eficiență — Kubexplain AI Server
 
-Acest fisier inventariaza parametrii care influenteaza performanta/costul in proiect: timp, dimensiuni, context, RAG, memorie.
+Acest fișier inventariază **toți** parametrii care influențează performanța, costul și calitatea
+răspunsurilor în componenta AI Server a proiectului.  
+Valorile sunt extrase direct din cod (constantele și proprietățile de configurare existente la
+momentul redactării); fiecare linie indică sursa exactă cu număr de linie.
 
-## 0) Limite DOAR in numar de caractere (cu sursa exacta din cod)
+---
 
-Nota: sectiunea aceasta include doar limite exprimate in caractere (`substring`, `truncate`, `VARCHAR(n)`), nu limite in MB/secunde.
+## 1. Limite explicite în caractere
 
-- `3,000` caractere per artifact in prompt-ul catre LLM
-  - cod exact: `MAX_ARTIFACT_PROMPT_CHARS = 3000`
-  - folosire: limiteaza cat din fiecare artifact intra in promptul final trimis la Ollama
-  - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
-- `200` caractere din fiecare artifact folosite pentru query-ul de retrieval docs
-  - cod exact: `MAX_RETRIEVAL_SNIPPET_CHARS = 200`
-  - folosire: pastreaza doar un fragment mic pentru cautarea in docs, ca semnal semantic
-  - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
- - `12,000` caractere maxim pentru contextul total injectat din docs
-  - cod exact: `private static final int MAX_CONTEXT_CHARS = 12000;`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
-- `10,000` caractere maxim returnate dintr-un document in dynamic search
-  - cod exact: `return truncate(content, MAX_DYNAMIC_DOC_CHARS);`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
-- `20,000` caractere maxim salvate per document docs in DB (static/dynamic)
-  - cod exact: `truncate(text, 20000)` si `truncate(content, 20000)`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
-- `500` caractere pentru preview/truncare string in log-ul payload backend -> AI
-  - cod exact: `trimLargeStrings(kdiag, 500)`
-  - sursa: `backend/src/main/java/com/example/services/AiForwardingService.java`
-- `100` caractere pentru preview/truncare content mesaj in log-ul Ollama
-  - cod exact: `truncate(m.getOrDefault("content", ""), 100)`
-  - sursa: `Server/src/main/java/com/kdiag/server/ollama/OllamaClient.java`
+### 1.1 Pipeline AiEngine (prompt assembly)
 
-### Limite de tip coloana (caractere) din schema
+| Constantă | Valoare | Fișier | Linie |
+|-----------|--------:|-------|------:|
+| `MAX_TOTAL_PROMPT_CHARS` | 28 000 | `Server/src/main/java/com/kdiag/server/ai/AiEngine.java` | 43 |
+| `MAX_ARTIFACT_PROMPT_CHARS` | 6 000 | `Server/src/main/java/com/kdiag/server/ai/AiEngine.java` | 42 |
+| `MAX_RETRIEVAL_SNIPPET_CHARS` | 400 | `Server/src/main/java/com/kdiag/server/ai/AiEngine.java` | 40 |
+| `MAX_RAG_CONTEXT_CHARS` | 12 000 | `Server/src/main/java/com/kdiag/server/ai/AiEngine.java` | 378 |
+| `MAX_ARTIFACTS_PER_REQUEST` | 5 | `Server/src/main/java/com/kdiag/server/ai/AiEngine.java` | 41 |
+| `MAX_RECENT_HISTORY_MESSAGES` | 12 | `Server/src/main/java/com/kdiag/server/ai/AiEngine.java` | 38 |
+| `SUMMARY_TRIGGER_HISTORY_MESSAGES` | 10 | `Server/src/main/java/com/kdiag/server/ai/AiEngine.java` | 39 |
 
-- `conversation_id`: `VARCHAR(100)`
-  - sursa: `db_migrations/2026-03-03_add_chat_attachments.sql`
-  - sursa: `init.sql`
-- `file_name`: `VARCHAR(255)`
-  - sursa: `db_migrations/2026-03-03_add_chat_attachments.sql`
-  - folosire: numele fisierului atasat; limita este aliniata cu `MAX_FILE_NAME_CHARS = 255`
-- `mime_type`: `VARCHAR(120)`
-  - sursa: `db_migrations/2026-03-03_add_chat_attachments.sql`
-- `sha256`: `VARCHAR(64)`
-  - sursa: `db_migrations/2026-03-03_add_chat_attachments.sql`
-- `content_encoding`: `VARCHAR(20)`
-  - sursa: `db_migrations/2026-03-03_add_chat_attachments.sql`
-- `source`: `VARCHAR(100)`
-  - sursa: `init.sql`
-- `cluster_configs.name`: `VARCHAR(100)`
-  - sursa: `init.sql`
-- `cluster_configs.display_name`: `VARCHAR(255)`
-  - sursa: `init.sql`
-- `cluster_configs.kubeconfig_path`: `VARCHAR(500)`
-  - sursa: `init.sql`
-- `cluster_configs.context_name`: `VARCHAR(255)`
-  - sursa: `init.sql`
-- `cluster_configs.default_namespace`: `VARCHAR(100)`
-  - sursa: `init.sql`
-- `problem_resolutions.searchQuery`: `length = 1000`
-  - cod exact: `@Column(nullable = false, length = 1000)`
-  - sursa: `Server/src/main/java/com/kdiag/server/entities/ProblemResolution.java`
-- `kubernetes_doc_pages.url`: `length = 1024`
-  - cod exact: `@Column(nullable = false, unique = true, length = 1024)`
-  - sursa: `Server/src/main/java/com/kdiag/server/entities/KubernetesDocPage.java`
+> **MAX_TOTAL_PROMPT_CHARS** este plafonul total al mesajelor trimise la Ollama (sistem + istoric +
+> mesaj curent). Mesajele istorice sunt truniate la `remainingBudget` pentru a rămâne în buget.  
+> **MAX_RAG_CONTEXT_CHARS** este bugetul de caractere pentru blocul de documentație injectată din
+> indexul Lucene sau baza de date.
 
-## 1) Timp (timeouts, scheduling, cache TTL)
+---
 
-- `kubectl quick check`: `3s`
-  - sursa: `backend/src/main/java/com/example/services/KubectlService.java`
-- `scan-pods`: timeout comanda `10s`
-  - sursa: `backend/src/main/java/com/example/controllers/PodsController.java`
-- `pod-details`:
-  - `describe`: `15s`
-  - `json`: `15s`
-  - `events`: `15s`
-  - `logs`: `15s`
-  - sursa: `backend/src/main/java/com/example/controllers/PodsController.java`
-- `scan-nodes`: timeout comanda `10s`
-  - sursa: `backend/src/main/java/com/example/controllers/NodesController.java`
-- `node-details`:
-  - `describe`: `25s`
-  - `json`: `20s`
-  - `events`: `20s`
-  - sursa: `backend/src/main/java/com/example/controllers/NodesController.java`
-- `cluster test` (`/api/clusters/{id}/test`): `10s`
-  - sursa: `backend/src/main/java/com/example/controllers/ClusterController.java`
-- `cluster namespaces` (`/api/clusters/{id}/namespaces`): `10s`
-  - sursa: `backend/src/main/java/com/example/controllers/ClusterController.java`
-- `Ollama call timeout`: `60s` (configurabil din `OLLAMA_TIMEOUT_SECONDS`)
-  - sursa: `Server/src/main/resources/application.properties`
-  - folosit in: `Server/src/main/java/com/kdiag/server/ollama/OllamaClient.java`
-- `RAG scraping (DuckDuckGo HTML)`: `10s`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
-- `RAG scraping (kubernetes pages)`: `8s`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
-- `stopwords cache TTL`: `24h`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
-- cleanup retention job: ruleaza zilnic la `03:30` (`cron = 0 30 3 * * *`)
-  - sursa: `backend/src/main/java/com/example/services/RetentionCleanupJob.java`
-- CORS max-age: `3600s`
-  - sursa: `backend/src/main/java/com/example/Application.java`
+### 1.2 Validare protocol (KdiagModels)
 
-## 2) Dimensiune (payload, fisiere, text, memorie)
+| Câmp | Limită | Fișier | Linie |
+|------|-------:|-------|------:|
+| `conversationId` | 100 chars (`@Size`) | `Server/src/main/java/com/kdiag/server/protocol/KdiagModels.java` | 31 |
+| `message.text` | 16 000 chars (`@Size`) | `Server/src/main/java/com/kdiag/server/protocol/KdiagModels.java` | 159 |
+| `artifact.content` | 20 000 chars (`@Size`) | `Server/src/main/java/com/kdiag/server/protocol/KdiagModels.java` | 284 |
 
-- Backend multipart upload:
-  - `spring.servlet.multipart.max-file-size=5MB`
-  - `spring.servlet.multipart.max-request-size=10MB`
-  - sursa: `backend/src/main/resources/application.properties`
-- AI Server multipart upload:
-  - `spring.servlet.multipart.max-file-size=10MB`
-  - `spring.servlet.multipart.max-request-size=10MB`
-  - sursa: `Server/src/main/resources/application.properties`
-- Limita atasament individual salvat in DB: `2MB`
-  - `MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024`
-  - sursa: `backend/src/main/java/com/example/services/AttachmentService.java`
-- Numar maxim atasamente per mesaj: `12`
-  - `MAX_ATTACHMENTS_PER_MESSAGE = 12`
-  - sursa: `backend/src/main/java/com/example/services/AttachmentService.java`
-- `kubectl logs` preluat in detalii: `--tail=200`
-  - sursa: `backend/src/main/java/com/example/controllers/PodsController.java`
-- limita text mesaj utilizator (request chat): `4000` caractere
-  - sursa: `backend/src/main/java/com/example/entities/Chat.java`
-  - folosire: opreste mesaje foarte lungi inainte sa ajunga in DB sau in prompt
-- limita text artifact in prompt (per artifact): `3,000` caractere
-  - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
-  - folosire: lasa loc in prompt pentru istoric si docs, fara sa explodeze contextul
-- max artifacts incluse in prompt per request: `5`
-  - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
-  - folosire: limiteaza cate dovezi brute intra intr-un singur request
-- limita `artifact.content` acceptata de protocol: `10,000` caractere
-  - sursa: `Server/src/main/java/com/kdiag/server/protocol/KdiagModels.java`
-  - folosire: respinge payload-uri prea mari inainte de procesare
-- context docs injectat in prompt: `MAX_CONTEXT_CHARS = 12,000`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
-  - folosire: taie contextul din docs la o marime care ramane utila pentru LLM
-- text doc salvat in DB la scrape static/dinamic: trunchiat la `20,000` caractere
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
-- text doc returnat din dynamic search catre LLM: trunchiat la `10,000` caractere
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
-- snippet extras din artifact pentru query semantic docs: max `200` caractere/artifact
-  - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
-- truncare log payload backend->AI (doar pentru logging): `500` caractere/string
-  - sursa: `backend/src/main/java/com/example/services/AiForwardingService.java`
-- truncare log mesaje Ollama (doar pentru logging): `100` caractere/mesaj
-  - sursa: `Server/src/main/java/com/kdiag/server/ollama/OllamaClient.java`
+---
 
-### Dimensiuni de infrastructura (container/runtime)
+### 1.3 Mesaj utilizator în backend
 
-- backend container:
-  - `mem_limit: 2g`
-  - `JAVA_OPTS: -Xmx1536m -Xms768m`
-  - sursa: `docker-compose.yml`
-- frontend container:
-  - `mem_limit: 1g`
-  - `NODE_OPTIONS=--max-old-space-size=512`
-  - sursa: `docker-compose.yml`
-- AI server container: nu are `mem_limit` explicit in `docker-compose-ai.yml`
+| Constantă | Valoare | Fișier | Linie |
+|-----------|--------:|-------|------:|
+| `MAX_USER_MESSAGE_CHARS` | 16 000 | `backend/src/main/java/com/example/entities/Chat.java` | 17 |
 
-## 3) Context conversațional (istoric/memorie)
+Aceeași limită este enforced client-side:
+```js
+const MAX_MESSAGE_LENGTH = 16000;   // frontend/js/chat.js:11
+```
 
-- AI history este in-memory (`ConcurrentHashMap<String, List<HistoryEntry>>`)
-  - raw history este limitat la ultimele `12` mesaje brute per conversatie
-  - la `10` mesaje brute se declanseaza in fundal o sumarizare rulanta
-  - rezumatul conversatiei este pastrat separat si este injectat in promptul curent
-  - sursa: `Server/src/main/java/com/kdiag/server/ai/history/HistoryService.java`
-- In `AiEngine`, pentru conversatiile cu `conversationId`, se trimit in LLM toate entry-urile din history + mesajul de sistem
-  - cu un rezumat compact al conversatiei + mesajele brute recente
-  - sursa: `Server/src/main/java/com/kdiag/server/ai/AiEngine.java`
-- In backend, contextele persistate (`conversation_context`) se curata dupa `30 zile`
-  - sursa: `backend/src/main/java/com/example/services/RetentionCleanupJob.java`
+---
 
-## 4) Parametri RAG (retrieval + context assembly)
+### 1.4 RAG — scraping și persistență
 
-- surse statice indexate la init: `5` URL-uri Kubernetes docs
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
-- ranking pagini:
-  - daca nu exista keywords -> returneaza primele `min(3, pages.size())`
-  - cu keywords -> top `3`
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java`
-- dynamic search:
-  - ia top `2` rezultate DDG (filtrate pe `kubernetes.io/docs`)
-  - sursa: `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java`
-- temperatura modelului: `0.2` (default/configurabil)
-  - sursa: `Server/src/main/resources/application.properties`
-  - folosire: `Server/src/main/java/com/kdiag/server/ollama/OllamaClient.java`
-- model default: `llama3.1` (configurabil)
-  - sursa: `Server/src/main/resources/application.properties`
+| Constantă | Valoare | Fișier | Linie |
+|-----------|--------:|-------|------:|
+| `MAX_CONTEXT_CHARS` _(fallback legacy)_ | 12 000 | `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java` | 35 |
+| `ABSOLUTE_PERSIST_CHAR_CAP` _(static)_ | 500 000 | `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java` | 37 |
+| `MAX_DYNAMIC_DOC_CHARS` | 10 000 | `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java` | 30 |
+| `ABSOLUTE_PERSIST_CHAR_CAP` _(dynamic)_ | 500 000 | `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java` | 32 |
 
-## 5) Limite de schema DB (campuri cu maxima explicita)
+> `ABSOLUTE_PERSIST_CHAR_CAP = 500 000` înlocuiește vechiul plafon de 20 000 caractere.
+> Textul extras cu Readability4j este stocat nearbitronic în coloana TEXT din PostgreSQL;
+> limita de 500 k caractere apare doar la pagini-oglidă patologice.
 
-- `chat_attachments`:
-  - `conversation_id VARCHAR(100)`
-  - `file_name VARCHAR(255)`
-  - `mime_type VARCHAR(120)`
-  - `sha256 VARCHAR(64)`
-  - `content_encoding VARCHAR(20)`
-  - `content BYTEA` (fara limita SQL, limitat aplicativ la 2MB/atasament)
-  - sursa: `db_migrations/2026-03-03_add_chat_attachments.sql`
-- `conversation_context`:
-  - `conversation_id VARCHAR(100)`
-  - `source VARCHAR(100)`
-  - `payload_json TEXT`
-  - sursa: `init.sql`
-- `cluster_configs`:
-  - `name VARCHAR(100)`
-  - `display_name VARCHAR(255)`
-  - `kubeconfig_path VARCHAR(500)`
-  - `context_name VARCHAR(255)`
-  - `default_namespace VARCHAR(100)`
-  - sursa: `init.sql`
-- `problem_resolutions.searchQuery`: `length = 1000`
-  - sursa: `Server/src/main/java/com/kdiag/server/entities/ProblemResolution.java`
-- `kubernetes_doc_pages.url`: `length = 1024`
-  - sursa: `Server/src/main/java/com/kdiag/server/entities/KubernetesDocPage.java`
+---
 
-## 6) Parametri fara maxima explicita (zone de risc)
+### 1.5 Lucene BM25 — chunk splitting
 
-- `fetch()` din frontend fara timeout custom
-  - sursa: `frontend/js/api.js`
-- [x] `RestTemplate` backend->AI has explicit connect/read timeouts (3s/65s)
-  - sursa: `backend/src/main/java/com/example/services/AiForwardingService.java`
-- `HistoryService` in-memory cu raw history limitat + summary rulant
-  - sursa: `Server/src/main/java/com/kdiag/server/ai/history/HistoryService.java`
-- protocol model (`KdiagModels`) fara `@Size` pe campuri text/artifacts
-  - sursa: `Server/src/main/java/com/kdiag/server/protocol/KdiagModels.java`
-- [x] frontend enforces client-side attachment limits (<=2MB per file, max 12 files)
-  - sursa: `frontend/js/attachments.js`
+| Constantă | Valoare | Fișier | Linie |
+|-----------|--------:|-------|------:|
+| `TARGET_CHUNK_CHARS` | 1 200 | `Server/src/main/java/com/kdiag/server/docs/index/ChunkSplitter.java` | 9 |
+| `MAX_CHUNK_CHARS` | 1 800 | `Server/src/main/java/com/kdiag/server/docs/index/ChunkSplitter.java` | 10 |
+| `OVERLAP_CHARS` | 100 | `Server/src/main/java/com/kdiag/server/docs/index/ChunkSplitter.java` | 11 |
 
-## 7) Rezumat rapid (valorile maxime principale)
+Algoritmul în 3 pași: împărțire pe paragrafe → despicare la nivel de propoziție dacă depășim
+`MAX_CHUNK_CHARS` → prefix de suprapunere `OVERLAP_CHARS` pentru a menține continuitatea
+semantică între chunk-uri consecutive.
 
-- Max upload backend: `5MB`/fisier, `10MB`/request
-- Max upload AI server: `10MB`/fisier, `10MB`/request
-- Max atasament persistat: `2MB`
-- Max atasamente/mesaj: `12`
-- Max mesaje brute in history: `12`
-- Prag pornire sumarizare: `10`
-- Max artifacte incluse in prompt: `5`
-- Max text per artifact in prompt: `3,000` chars
-- Max context docs injectat: `12,000` chars
-- Max pagini statice in context: `3`
-- Max rezultate dynamic search: `2`
-- Ollama timeout: `60s`
-- kubectl timeouts: `10s` scan, `15-25s` detalii
-- Retention date context/attachments: `30 zile`
+---
 
-## 8) Observatie
+### 1.6 Case-Based Retrieval (pgvector)
 
-Interpretare importanta: majoritatea limitelor mari sunt acum explicate si puse in constante la nivel de clasa; ramane de urmarit in special:
-- history in-memory fara cap global,
-- cresterea bugetului total de prompt catre LLM,
-- lungimea surselor dinamice daca apar doc-uri neobisnuit de mari.
+| Constantă | Valoare | Fișier | Linie |
+|-----------|--------:|-------|------:|
+| `SIMILARITY_THRESHOLD` | 0.75 | `Server/src/main/java/com/kdiag/server/ai/feedback/FeedbackRetrievalService.java` | 47 |
+| `MAX_SIMILAR_CASES` | 3 | `Server/src/main/java/com/kdiag/server/ai/feedback/FeedbackRetrievalService.java` | 48 |
+| `BOOSTED_URLS_TTL_MS` | 60 000 ms (60 s) | `Server/src/main/java/com/kdiag/server/ai/feedback/FeedbackRetrievalService.java` | 49 |
+| `MAX_CASE_RESPONSE_CHARS` | 1 200 | `Server/src/main/java/com/kdiag/server/ai/feedback/FeedbackRetrievalService.java` | 50 |
+| `MAX_CASE_QUESTION_CHARS` | 300 | `Server/src/main/java/com/kdiag/server/ai/feedback/FeedbackRetrievalService.java` | 51 |
+
+> `SIMILARITY_THRESHOLD = 0.75` — distanța cosinus pgvector este convertită în similaritate
+> `sim = 1 − dist`; cazurile sub prag sunt excluse din sistemul de prompting.  
+> `BOOSTED_URLS_TTL_MS = 60 s` — cache-ul URL-urilor boost se invalidează automat la 60 de
+> secunde. Apăsarea 👍 resetează `cachedBoostedUrlsAt = 0` imediat.
+
+---
+
+## 2. Limite de timp (timeout-uri, scheduling, cache TTL)
+
+| Operație | Valoare | Sursă |
+|----------|--------:|-------|
+| Ollama chat timeout | `60s` (env `OLLAMA_TIMEOUT_SECONDS`) | `Server/src/main/resources/application.properties` → `OllamaClient.java` |
+| Ollama embedding timeout | `30s` (env `OLLAMA_EMBEDDING_TIMEOUT`) | `Server/src/main/resources/application.properties` → `OllamaEmbeddingClient.java` |
+| RAG scraping — pagini statice | `8s` | `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java` |
+| RAG scraping — DuckDuckGo HTML | `10s` | `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java` |
+| RAG scraping — pagini dinamice | `8s` | `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java` |
+| SSE streaming WebClient timeout (backend) | `120s` | `backend/src/main/java/com/example/services/AiForwardingService.java` |
+| Boosted-URLs cache TTL | `60s` | `FeedbackRetrievalService.java:49` |
+| Stopwords cache TTL | `24h` | `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java` |
+| Retention cleanup job | zilnic `03:30` (`cron = 0 30 3 * * *`) | `backend/src/main/java/com/example/services/RetentionCleanupJob.java` |
+| CORS max-age | `3600s` | `backend/src/main/java/com/example/Application.java` |
+| kubectl scan-pods | `10s` | `backend/src/main/java/com/example/controllers/PodsController.java` |
+| kubectl pod describe/logs/events | `15s` fiecare | `backend/src/main/java/com/example/controllers/PodsController.java` |
+| kubectl scan-nodes | `10s` | `backend/src/main/java/com/example/controllers/NodesController.java` |
+| kubectl node describe | `25s` | `backend/src/main/java/com/example/controllers/NodesController.java` |
+| cluster test / namespaces | `10s` | `backend/src/main/java/com/example/controllers/ClusterController.java` |
+
+---
+
+## 3. Parametri Ollama
+
+Valori implicite din `Server/src/main/resources/application.properties`, suprascrise prin variabile
+de mediu:
+
+| Proprietate | Valoare implicită | Variabilă de mediu |
+|-------------|:-----------------:|-------------------|
+| `ollama.base-url` | `http://localhost:11434` | `OLLAMA_BASE_URL` |
+| `ollama.model` | `llama3.1` | `OLLAMA_MODEL` |
+| `ollama.temperature` | `0.2` | `OLLAMA_TEMPERATURE` |
+| `ollama.timeout-seconds` | `60` | `OLLAMA_TIMEOUT_SECONDS` |
+| `ollama.num-ctx` | `8192` | `OLLAMA_NUM_CTX` |
+| `ollama.embedding-model` | `nomic-embed-text` | `OLLAMA_EMBEDDING_MODEL` |
+| `ollama.embedding-timeout-seconds` | `30` | `OLLAMA_EMBEDDING_TIMEOUT` |
+
+> `num_ctx = 8192` tokens ≈ 32 768 caractere disponibil. Promptul asamblat este plafonate la
+> `MAX_TOTAL_PROMPT_CHARS = 28 000` caractere, asigurând că contextul LLM nu este depășit în
+> condiții normale.  
+> `MetricsCollector.recordNumCtxOverflowIfApplicable` semnalează când `promptChars > numCtx × 4`.
+
+---
+
+## 4. Arhitectura RAG (Retrieval-Augmented Generation)
+
+```
+Cerere utilizator
+      │
+      ▼
+[AiEngine.fetchRelevantDocs]
+      │
+      ├─ 1. Construct query: userText + artifact snippets (≤ 400 chars/artifact)
+      │
+      ├─ 2. getRelevantDocsByBm25Boosted(query, 12 chunks, boostedUrls)
+      │       │
+      │       ├─ LuceneChunkIndex.search(query, 12, boostedUrls)
+      │       │       │
+      │       │       ├─ BM25 Lucene (Apache Lucene 9.11.1, MMapDirectory, BM25Similarity)
+      │       │       ├─ Dacă boostedUrls ≠ ∅: extrage 2×12 candidați, înmulțește scorul
+      │       │       │   cu 1.5× pentru URL-urile care au primit 👍, re-sortează, trimite topK
+      │       │       └─ ChunkSplitter: TARGET=1200 / MAX=1800 / OVERLAP=100 chars
+      │       │
+      │       └─ assembleContext: grupare pe URL, cap la MAX_RAG_CONTEXT_CHARS = 12 000
+      │
+      ├─ 3. Fallback: getRelevantDocs (keyword scoring legacy)
+      │
+      └─ 4. (Opțional) [NEEDS_SEARCH:] → KubernetesDynamicSearcher
+                 │
+                 ├─ DuckDuckGo HTML scraping → top 2 rezultate kubernetes.io/docs
+                 ├─ Readability4j extraction → text curat
+                 └─ Persistat în DB (kubernetes_doc_pages, dynamic=true)
+                    + indexat în Lucene (indexPage)
+
+Extragere text din pagini:
+  HTML → Readability4j Article.textContent()
+       → fallback JSoup selector (main, article, .td-content)
+  Stocat în PostgreSQL TEXT (unbounded, cap aplicativ 500 000 chars)
+  Indexat în Lucene: ChunkSplitter → DocChunk → StringField(pageId/url) + TextField(title/text)
+```
+
+---
+
+## 5. Streaming SSE end-to-end
+
+Trei salturi din frontend până la Ollama:
+
+```
+Browser (EventSource / fetch + ReadableStream)
+  │  POST /api/chat/stream   (backend port 8080)
+  │
+Backend Spring MVC — AiForwardingService.forwardStream()
+  │  Flux<ServerSentEvent<String>>  (WebClient, timeout 120s)
+  │  POST /v1/chat/stream   (AI Server port 8090)
+  │
+AI Server Spring WebFlux — ChatController.chatStream()
+  │  Flux<String> → map to SSE events: meta / chunk / done / error
+  │  AiEngine.solveStream() → OllamaClient.chatStream()
+  │  POST /api/chat  (Ollama, stream=true, NDJSON)
+  │
+Ollama
+```
+
+Tipuri de evenimente SSE:
+- `meta`  — primul eveniment; payload JSON `{conversationId, protocolVersion}`
+- `chunk` — un token/fragment din răspunsul asistentului
+- `done`  — semnalează sfârșitul streamului
+- `error` — emis în loc de `done` la eșec
+
+Persistența pe streaming: `doFinally` în `solveStream()` scrie răspunsul complet în
+`HistoryService` indiferent dacă stream-ul s-a terminat normal sau a fost anulat.
+
+---
+
+## 6. Bucla de feedback
+
+```
+Utilizator apasă 👍 pe un răspuns
+      │
+      ▼
+POST /v1/history/{convId}/feedback  {"score": 1}
+      │
+      ├─ ProblemResolutionRepository: setFeedback(convId, 1)   (dynamic search path)
+      │
+      └─ FeedbackRetrievalService.onPositiveFeedback(convId)
+              │
+              ├─ Citeste QaFeedback (ultima înregistrare pentru conversație)
+              ├─ OllamaEmbeddingClient.embedAsPgVector(userQuestion)
+              │       └─ POST /api/embeddings (nomic-embed-text, 768 dims)
+              │          → "[d0,...,d767]"  (Locale.ROOT, 6 zecimale)
+              ├─ qaRepo.updateEmbeddingAndFeedback(id, vec, 1)
+              │       └─ CAST(:vec AS vector)  (pgvector HNSW index)
+              └─ Invalidează cache boostedUrls (cachedBoostedUrlsAt = 0)
+
+La următorul mesaj similar:
+      FeedbackRetrievalService.findSimilarCases(userQuestion)
+        └─ ANN cosine search în qa_feedback WHERE feedback >= 1
+           → până la 3 cazuri cu similaritate ≥ 0.75
+           → injectate în system prompt sub "PREVIOUSLY SUCCESSFUL ANSWERS"
+           → budget 4 000 chars, truncare per caz
+```
+
+---
+
+## 7. Observabilitate — endpoint-uri de diagnosticare
+
+Toate endpoint-urile sunt pe AI Server (port 8090 implicit):
+
+| Endpoint | Metodă | Descriere |
+|----------|--------|-----------|
+| `GET /v1/metrics` | GET | Snapshot complet al tuturor contoarelor + medii derivate (`MetricsController`) |
+| `POST /v1/metrics/reset` | POST | Zeroizare contoare între demo-uri |
+| `GET /v1/feedback/stats` | GET | Statistici tabel `qa_feedback`: total/pozitiv/negativ/neutru/cu-embedding |
+| `GET /v1/feedback/boosted-urls` | GET | Starea cache-ului URL-urilor boost + TTL rămas |
+| `GET /v1/index/stats` | GET | Număr chunk-uri Lucene, bytes index, data ultimului rebuild |
+| `GET /actuator/health` | GET | Health probe Spring Boot (configurat în `application.properties`) |
+
+### Contoarele `GET /v1/metrics`
+
+```json
+{
+  "totalChatRequests":        "<n>",
+  "totalStreamingRequests":   "<n>",
+  "totalFallbackResponses":   "<n>",
+  "totalNeedsSearchTriggers": "<n>",
+  "totalResponseTimeMs":      "<ms>",
+  "totalOllamaLatencyMs":     "<ms>",
+  "totalEmbeddingLatencyMs":  "<ms>",
+  "totalPromptChars":         "<n>",
+  "totalResponseChars":       "<n>",
+  "bm25Searches":             "<n>",
+  "bm25EmptyResults":         "<n>",
+  "bm25BoostedSearches":      "<n>",
+  "similarCasesQueries":      "<n>",
+  "similarCasesHits":         "<n>",
+  "embeddingFailures":        "<n>",
+  "numCtxOverflowsApprox":    "<n>",
+  "avgResponseTimeMs":        "<ms>",
+  "avgOllamaLatencyMs":       "<ms>",
+  "avgEmbeddingLatencyMs":    "<ms>",
+  "avgPromptChars":           "<n>",
+  "avgResponseChars":         "<n>",
+  "bm25HitRate":              "<0.0–1.0>",
+  "similarCasesHitRate":      "<0.0–1.0>",
+  "streamingRatio":           "<0.0–1.0>"
+}
+```
+
+Toate contoarele sunt `AtomicLong`; nu există `synchronized` pe calea normală de execuție.
+
+---
+
+## 8. Zone de risc rămase
+
+| Risc | Detalii | Locație |
+|------|---------|---------|
+| **HistoryService fără cap global** | `ConcurrentHashMap<String, List<HistoryEntry>>` poate crește nelimitat în număr de conversații; nu există evicție de tip LRU sau limită totală de memorie | `Server/src/main/java/com/kdiag/server/ai/history/HistoryService.java` |
+| **NEEDS_SEARCH incompatibil cu streaming** | Bucla dinamică RAG necesită răspunsul complet al modelului înainte de re-interogare; pe calea de streaming se sare deliberat (TODO în cod) | `AiEngine.solveStream()` |
+| **Embedding sincron în thread HTTP** | `onPositiveFeedback` rulează `embedAsPgVector` sincron; dacă modelul Ollama este lent (> 30s), feedback-ul 👍 blochează thread-ul HTTP al backend-ului | `FeedbackRetrievalService.onPositiveFeedback()` |
+| **Contoare metrici non-atomice cross-field** | `snapshot()` citește câmpuri atomice individual; nu există snapshot transacțional, deci perechea `(totalChatRequests, totalResponseTimeMs)` poate fi inconsistentă sub concurență mare | `MetricsCollector.snapshot()` |
+| **fetch() frontend fără timeout** | Cererile SSE din browser nu au un timeout client-side explicit; dacă server-ul tace, browser-ul așteaptă indefinit | `frontend/js/chat.js` |
+| **Lucene index pe disc fără rotație** | Indexul `lucene_index/` crește monoton; nu există compactare automată sau limită de dimensiune | `LuceneChunkIndex`, `kdiag.lucene.dir=./lucene_index` |
+| **pgvector HNSW neindexat pentru feedback < 1** | Căutarea ANN este eficientă; totuși, tabelul `qa_feedback` cu `feedback=0` (neutru) nu este niciodată curățat, putând crește continuu | `db_migrations/2026-05-12_qa_feedback_pgvector.sql` |
+
+---
+
+## 9. Rezumat rapid
+
+| Categorie | Parametru | Valoare |
+|-----------|-----------|--------:|
+| Prompt total max | `MAX_TOTAL_PROMPT_CHARS` | 28 000 chars |
+| Artifact per prompt | `MAX_ARTIFACT_PROMPT_CHARS` | 6 000 chars |
+| Artefacte per request | `MAX_ARTIFACTS_PER_REQUEST` | 5 |
+| Context RAG injectat | `MAX_RAG_CONTEXT_CHARS` | 12 000 chars |
+| Mesaj utilizator max | `MAX_USER_MESSAGE_CHARS` | 16 000 chars |
+| Chunk Lucene țintă | `TARGET_CHUNK_CHARS` | 1 200 chars |
+| Chunk Lucene maxim | `MAX_CHUNK_CHARS` | 1 800 chars |
+| Suprapunere chunk | `OVERLAP_CHARS` | 100 chars |
+| Cazuri CBR returnate | `MAX_SIMILAR_CASES` | 3 |
+| Prag similaritate CBR | `SIMILARITY_THRESHOLD` | 0.75 |
+| Persist doc max | `ABSOLUTE_PERSIST_CHAR_CAP` | 500 000 chars |
+| Context Ollama | `ollama.num-ctx` | 8 192 tokens (~32 768 chars) |
+| Embedding model | `ollama.embedding-model` | nomic-embed-text (768 dims) |
+| Timeout Ollama | `ollama.timeout-seconds` | 60 s |
+| Timeout embedding | `ollama.embedding-timeout-seconds` | 30 s |
+| Cache boosted URLs | `BOOSTED_URLS_TTL_MS` | 60 s |
+| Istoric brut max | `MAX_RECENT_HISTORY_MESSAGES` | 12 mesaje |
+| Prag sumarizare | `SUMMARY_TRIGGER_HISTORY_MESSAGES` | 10 mesaje |

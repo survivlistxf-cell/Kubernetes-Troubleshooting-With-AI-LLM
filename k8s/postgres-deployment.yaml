@@ -14,7 +14,10 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          # pgvector/pgvector:pg16 ships pgvector preinstalled — required by the
+          # qa_feedback.embedding column (vector(768)).  See docker-compose.yml
+          # and init.sql for the same change in the Compose dev environment.
+          image: pgvector/pgvector:pg16
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5432

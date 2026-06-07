@@ -1,8 +1,17 @@
 package com.kdiag.server.ollama;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kdiag.server.metrics.MetricsCollector;
+import reactor.core.publisher.Flux;
+
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -13,8 +22,10 @@ import org.slf4j.LoggerFactory;
 /**
  * Minimal Ollama HTTP client.
  *
- * Uses Ollama's OpenAI-compatible endpoint:
- * POST {baseUrl}/v1/chat/completions
+ * Uses Ollama's native endpoint:
+ * POST {baseUrl}/api/chat
+ *
+ * Supports both blocking (chat) and reactive streaming (chatStream).
  */
 @Component
 public class OllamaClient {
@@ -25,6 +36,22 @@ public class OllamaClient {
     private final String model;
     private final double temperature;
     private final Duration timeout;
+
+    // Field-injected so the 4-param constructor stays compatible with existing tests.
+    @Value("${ollama.num-ctx:8192}")
+    private int numCtx;
+
+    // Spring injects its shared ObjectMapper if available; falls back to a local instance otherwise.
+    @Autowired(required = false)
+    private ObjectMapper objectMapper;
+
+    // Optional metrics — null when running in a test context without the full application context.
+    @Autowired(required = false)
+    private MetricsCollector metricsCollector;
+
+    // -------------------------------------------------------------------------
+    // Constructor (kept at 4 params for backward test compatibility)
+    // -------------------------------------------------------------------------
 
     public OllamaClient(
             @Value("${ollama.base-url:http://localhost:11434}") String baseUrl,
@@ -39,63 +66,207 @@ public class OllamaClient {
         this.timeout = Duration.ofSeconds(timeoutSeconds);
     }
 
+    // -------------------------------------------------------------------------
+    // Accessors
+    // -------------------------------------------------------------------------
+
+    /** Exposes the configured context window so callers can detect prompt overflows. */
+    public int getNumCtx() {
+        return numCtx;
+    }
+
+    /**
+     * Queries {@code POST /api/show} for the model's maximum context length.
+     *
+     * <p>The {@code model_info} object in the response contains architecture-prefixed
+     * keys such as {@code "llama.context_length"}, {@code "gemma.context_length"},
+     * {@code "qwen.context_length"}, etc.  This method finds the first key that ends
+     * with {@code ".context_length"} and returns its value.
+     *
+     * @return the model's max context length, or {@link Optional#empty()} if the
+     *         endpoint is unavailable, the field is absent, or any error occurs.
+     *         Failures are logged at DEBUG level — this check is informational only.
+     */
+    public Optional<Integer> queryModelMaxContext() {
+        try {
+            Map<String, Object> req = Map.of("name", model);
+            String json = webClient.post()
+                    .uri("/api/show")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .bodyValue(req)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .timeout(Duration.ofSeconds(5))
+                    .block();
+
+            if (json == null || json.isBlank()) {
+                logger.debug("queryModelMaxContext: empty response from /api/show");
+                return Optional.empty();
+            }
+
+            ObjectMapper om = (objectMapper != null) ? objectMapper : new ObjectMapper();
+            JsonNode root      = om.readTree(json);
+            JsonNode modelInfo = root.get("model_info");
+            if (modelInfo == null || !modelInfo.isObject()) {
+                logger.debug("queryModelMaxContext: model_info absent in /api/show response");
+                return extractNumCtxFromModelfile(root);
+            }
+
+            // Keys are architecture-dependent: "llama.context_length", "gemma.context_length", …
+            var fields = modelInfo.fields();
+            while (fields.hasNext()) {
+                var entry = fields.next();
+                if (entry.getKey().endsWith(".context_length") && entry.getValue().isNumber()) {
+                    int ctx = entry.getValue().asInt();
+                    logger.debug("queryModelMaxContext: found {}: {}", entry.getKey(), ctx);
+                    return Optional.of(ctx);
+                }
+            }
+
+            logger.debug("queryModelMaxContext: no *.context_length key found in model_info; trying modelfile fallback");
+            return extractNumCtxFromModelfile(root);
+        } catch (Exception e) {
+            logger.debug("queryModelMaxContext failed (non-fatal): {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    private Optional<Integer> extractNumCtxFromModelfile(JsonNode root) {
+        JsonNode modelfileNode = root.get("modelfile");
+        if (modelfileNode == null || !modelfileNode.isTextual()) {
+            logger.debug("queryModelMaxContext: modelfile absent in /api/show response");
+            return Optional.empty();
+        }
+
+        String modelfile = modelfileNode.asText();
+        var matcher = java.util.regex.Pattern.compile("(?m)^PARAMETER\\s+num_ctx\\s+(\\d+)\\s*$").matcher(modelfile);
+        if (matcher.find()) {
+            int ctx = Integer.parseInt(matcher.group(1));
+            logger.debug("queryModelMaxContext: using num_ctx from modelfile fallback: {}", ctx);
+            return Optional.of(ctx);
+        }
+
+        logger.debug("queryModelMaxContext: no num_ctx parameter found in modelfile");
+        return Optional.empty();
+    }
+
+    // -------------------------------------------------------------------------
+    // Blocking chat (unchanged behaviour, new endpoint & request shape)
+    // -------------------------------------------------------------------------
+
     public String chat(List<Map<String, String>> messages) {
         Map<String, Object> req = Map.of(
-                "model", model,
-                "temperature", temperature,
-                "stream", false,
-                "messages", messages);
+                "model",    model,
+                "messages", messages,
+                "stream",   false,
+                "options",  Map.of("temperature", temperature, "num_ctx", numCtx));
 
         try {
-            // Trim individual message content for cleaner logs
             List<Map<String, String>> logMessages = messages.stream()
                     .map(m -> Map.of(
-                            "role", m.getOrDefault("role", "unknown"),
+                            "role",    m.getOrDefault("role", "unknown"),
                             "content", truncate(m.getOrDefault("content", ""), 100)))
                     .toList();
             logger.info("Request: model={} messages={}", model, logMessages);
         } catch (Exception ignored) {
         }
 
-        OllamaChatResponse resp = webClient.post()
-                .uri("/v1/chat/completions")
+        long ollamaStart = System.currentTimeMillis();
+        OllamaNativeResponse resp = webClient.post()
+                .uri("/api/chat")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
                 .bodyValue(req)
                 .retrieve()
-                .bodyToMono(OllamaChatResponse.class)
+                .bodyToMono(OllamaNativeResponse.class)
                 .timeout(timeout)
                 .block();
 
-        if (resp == null || resp.choices == null || resp.choices.isEmpty()) {
+        if (metricsCollector != null) {
+            metricsCollector.recordOllamaLatency(System.currentTimeMillis() - ollamaStart);
+        }
+
+        if (resp == null || resp.message == null) {
             return null;
         }
-
-        OllamaChatResponse.Choice first = resp.choices.get(0);
-        if (first == null || first.message == null) {
-            return null;
-        }
-        return first.message.content;
+        return resp.message.content;
     }
 
-    public static class OllamaChatResponse {
-        public List<Choice> choices;
+    // -------------------------------------------------------------------------
+    // Reactive streaming chat
+    // -------------------------------------------------------------------------
 
-        public static class Choice {
-            public Message message;
-        }
+    /**
+     * Streams token strings from Ollama's NDJSON streaming response.
+     * Each emitted element is the raw {@code message.content} of one token chunk.
+     * The terminal {@code done:true} object is filtered out.
+     */
+    public Flux<String> chatStream(List<Map<String, String>> messages) {
+        Map<String, Object> req = Map.of(
+                "model",    model,
+                "messages", messages,
+                "stream",   true,
+                "options",  Map.of("temperature", temperature, "num_ctx", numCtx));
 
-        public static class Message {
-            public String role;
-            public String content;
-        }
+        ObjectMapper om = (objectMapper != null) ? objectMapper : new ObjectMapper();
+
+        final long streamStart = System.currentTimeMillis();
+        // Flag ensures we record the time-to-first-token only once
+        final AtomicBoolean firstTokenRecorded = new AtomicBoolean(false);
+
+        return webClient.post()
+                .uri("/api/chat")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(req)
+                .retrieve()
+                .bodyToFlux(String.class)
+                .timeout(timeout)
+                // Ollama may batch multiple JSON objects in one TCP frame separated by '\n'
+                .flatMapIterable(chunk -> Arrays.asList(chunk.split("\n")))
+                .filter(line -> !line.isBlank())
+                .flatMap(line -> {
+                    try {
+                        OllamaNativeResponse resp = om.readValue(line, OllamaNativeResponse.class);
+                        if (resp.done || resp.message == null || resp.message.content == null
+                                || resp.message.content.isEmpty()) {
+                            return Flux.empty();
+                        }
+                        return Flux.just(resp.message.content);
+                    } catch (Exception e) {
+                        // Skip malformed / non-JSON lines (e.g. keep-alive pings)
+                        return Flux.empty();
+                    }
+                })
+                // Record time-to-first-token once the first real content chunk is emitted
+                .doOnNext(token -> {
+                    if (metricsCollector != null && firstTokenRecorded.compareAndSet(false, true)) {
+                        metricsCollector.recordOllamaLatency(System.currentTimeMillis() - streamStart);
+                    }
+                });
     }
+
+    // -------------------------------------------------------------------------
+    // Response model (Ollama native /api/chat format)
+    // -------------------------------------------------------------------------
+
+    public static class OllamaNativeResponse {
+        public OllamaMessage message;
+        public boolean done;
+    }
+
+    public static class OllamaMessage {
+        public String role;
+        public String content;
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
 
     private String truncate(String s, int max) {
-        if (s == null)
-            return "";
-        if (s.length() <= max)
-            return s;
-        return s.substring(0, max) + "...";
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 }

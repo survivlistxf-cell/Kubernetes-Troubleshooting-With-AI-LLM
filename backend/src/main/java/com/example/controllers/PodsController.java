@@ -3,11 +3,17 @@ package com.example.controllers;
 import com.example.entities.ClusterConfig;
 import com.example.repositories.ClusterConfigRepository;
 import com.example.services.KubectlService;
+import com.example.utils.Utils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @RestController
 @RequestMapping("/api")
@@ -23,29 +29,9 @@ public class PodsController {
         this.clusterRepo = clusterRepo;
     }
 
-    /**
-     * Resolve kubeconfig path: if clusterId is given, use that cluster's config;
-     * otherwise fall back to default behavior.
-     */
-    private String resolveKubeconfig(Long clusterId) {
-        if (clusterId != null) {
-            Optional<ClusterConfig> opt = clusterRepo.findById(clusterId);
-            if (opt.isPresent()) {
-                return kubectl.resolveKubeconfigForCluster(opt.get());
-            }
-        }
-        return kubectl.resolveKubeconfigPath();
-    }
-
-    /** Build kubectl prefix args for a cluster, or default */
+    /** Wrapper kept for call-site readability — delegates to {@link KubectlService#kubectlBase(Long)}. */
     private List<String> kubectlBase(Long clusterId) {
-        if (clusterId != null) {
-            Optional<ClusterConfig> opt = clusterRepo.findById(clusterId);
-            if (opt.isPresent()) {
-                return kubectl.buildKubectlPrefix(opt.get());
-            }
-        }
-        return new ArrayList<>(Arrays.asList("kubectl", "--kubeconfig", kubectl.resolveKubeconfigPath()));
+        return kubectl.kubectlBase(clusterId);
     }
 
     @GetMapping("/scan-pods")
@@ -172,6 +158,128 @@ public class PodsController {
     // }
     // ]
     // }
+
+    /** Run scan-pods on multiple clusters in parallel. clusterIds: CSV, max {@link Utils#MAX_MULTI_CLUSTERS}. */
+    @GetMapping("/scan-pods/multi")
+    public ResponseEntity<?> scanPodsMulti(
+            @RequestParam(name = "clusterIds") String clusterIds,
+            @RequestParam(name = "namespace", required = false, defaultValue = "default") String namespace,
+            @RequestParam(name = "namespaceMap", required = false) String namespaceMapJson) {
+
+        List<Long> ids = Utils.parseClusterIds(clusterIds);
+        if (ids.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "clusterIds is required"));
+        }
+        if (ids.size() > Utils.MAX_MULTI_CLUSTERS) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Maximum " + Utils.MAX_MULTI_CLUSTERS + " clusters allowed per multi-scan"));
+        }
+
+        Map<Long, String> namespaceMap = parseNamespaceMap(namespaceMapJson);
+        if (namespaceMapJson != null && !namespaceMapJson.isBlank() && namespaceMap == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "namespaceMap must be valid JSON"));
+        }
+
+        List<CompletableFuture<Map<String, Object>>> futures = new ArrayList<>();
+        for (Long id : ids) {
+            futures.add(CompletableFuture.supplyAsync(() -> scanPodsForCluster(id, namespace, namespaceMap)));
+        }
+
+        List<Map<String, Object>> results = new ArrayList<>();
+        for (int i = 0; i < futures.size(); i++) {
+            try {
+                results.add(futures.get(i).get(20, TimeUnit.SECONDS));
+            } catch (InterruptedException | ExecutionException | TimeoutException e) {
+                results.add(Map.of(
+                        "clusterId", ids.get(i),
+                        "success", false,
+                        "error", "Scan timed out or failed: " + e.getMessage(),
+                        "pods", List.of()));
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("results", results);
+        response.put("namespace", namespace);
+        if (namespaceMap != null && !namespaceMap.isEmpty()) {
+            response.put("namespaceMap", namespaceMap);
+        }
+        return ResponseEntity.ok(response);
+    }
+
+    private Map<Long, String> parseNamespaceMap(String namespaceMapJson) {
+        if (namespaceMapJson == null || namespaceMapJson.isBlank()) {
+            return Map.of();
+        }
+        try {
+            Map<String, String> raw = objectMapper.readValue(namespaceMapJson, new TypeReference<Map<String, String>>() {
+            });
+            Map<Long, String> parsed = new LinkedHashMap<>();
+            for (Map.Entry<String, String> entry : raw.entrySet()) {
+                if (entry.getKey() == null || entry.getValue() == null) {
+                    continue;
+                }
+                try {
+                    Long clusterId = Long.parseLong(entry.getKey().trim());
+                    String namespace = entry.getValue().trim();
+                    if (!namespace.isBlank()) {
+                        parsed.put(clusterId, namespace);
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            return parsed;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String resolveNamespaceForCluster(Long clusterId, String globalNamespace, Map<Long, String> namespaceMap) {
+        String namespace = namespaceMap != null ? namespaceMap.get(clusterId) : null;
+        if (namespace != null && !namespace.isBlank()) {
+            return namespace.trim();
+        }
+
+        if (globalNamespace != null && !globalNamespace.isBlank()) {
+            return globalNamespace.trim();
+        }
+
+        if (clusterId != null) {
+            Optional<ClusterConfig> opt = clusterRepo.findById(clusterId);
+            if (opt.isPresent() && opt.get().getDefaultNamespace() != null && !opt.get().getDefaultNamespace().isBlank()) {
+                return opt.get().getDefaultNamespace().trim();
+            }
+        }
+
+        return "default";
+    }
+
+    private Map<String, Object> scanPodsForCluster(Long clusterId, String namespace, Map<Long, String> namespaceMap) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("clusterId", clusterId);
+        if (clusterId == null) {
+            entry.put("success", false);
+            entry.put("error", "Cluster not found");
+            entry.put("pods", List.of());
+            return entry;
+        }
+
+        Optional<ClusterConfig> opt = clusterRepo.findById(clusterId);
+        if (opt.isEmpty()) {
+            entry.put("success", false);
+            entry.put("error", "Cluster not found");
+            entry.put("pods", List.of());
+            return entry;
+        }
+        entry.put("clusterName", opt.get().getName());
+        entry.put("clusterDisplayName", opt.get().getDisplayName());
+        String resolvedNamespace = resolveNamespaceForCluster(clusterId, namespace, namespaceMap);
+        Map<String, Object> scan = scanPods(resolvedNamespace, clusterId);
+        entry.putAll(scan);
+        entry.put("namespace", resolvedNamespace);
+        return entry;
+    }
 
     @GetMapping("/pod-details")
     public Map<String, Object> podDetails(

@@ -8,7 +8,10 @@ import { loadChatHistoryIntoTab } from './history.js';
 // DOM refs (initialized in initChat)
 let promptForm, promptInput, messagesArea;
 
-const MAX_MESSAGE_LENGTH = 4000;
+const MAX_MESSAGE_LENGTH = 16000;
+
+// Set to false to fall back to the non-streaming POST /api/chat endpoint.
+const STREAMING_ENABLED = true;
 
 // Typing indicator
 function showTypingIndicator() {
@@ -281,6 +284,221 @@ function attachCopyListeners(container) {
   });
 }
 
+// ----- Streaming helpers
+
+/**
+ * Parse a single SSE block (the text between two blank lines) into
+ * { event, data }.  The SSE spec allows multiple "data:" lines; we
+ * join them with '\n' for multi-line payloads.
+ *
+ * NOTE: Spring's ServerSentEventHttpMessageWriter emits "data:<value>"
+ * WITHOUT the optional separator space after the colon. LLM tokens
+ * frequently start with a leading space (e.g. " with", " a", " reason"),
+ * so unconditionally stripping a single leading space — as the W3C
+ * EventSource spec suggests — would eat those token-leading spaces and
+ * concatenate the words ("withareasonof"). We therefore preserve the
+ * raw payload verbatim and only strip an optional separator space on
+ * "event:" lines, where event names never legitimately start with
+ * whitespace.
+ */
+function parseSseEvent(part) {
+  let event = 'message';
+  const dataLines = [];
+  for (const rawLine of part.split('\n')) {
+    // Defensive: tolerate CRLF line endings from intermediate proxies.
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+    if (line.startsWith('event:')) {
+      event = line.slice(6).replace(/^ /, '');
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5));
+    }
+  }
+  return { event, data: dataLines.join('\n') };
+}
+
+/**
+ * Show (or replace) a transient status message inside the chat area while a
+ * NEEDS_SEARCH dynamic-search is running.  The element gets the id
+ * "status-indicator" so later calls replace rather than stack it.
+ *
+ * The bubble is removed automatically when the first TOKEN chunk arrives
+ * (handled inside {@link sendMessageStreaming}).
+ *
+ * @param {string} code  stable English identifier (e.g. "searching", "search_done")
+ * @param {string} label human-readable Romanian label shown in the UI
+ */
+function addStatusMessage(code, label) {
+  // Replace any existing status indicator instead of appending a second one.
+  const existing = document.getElementById('status-indicator');
+  if (existing) existing.remove();
+
+  const statusDiv = document.createElement('div');
+  statusDiv.className = 'system-status-message';
+  statusDiv.id = 'status-indicator';
+  statusDiv.dataset.code = code;
+  statusDiv.textContent = label;
+
+  // Place the indicator just before the streaming bubble so it visually
+  // precedes the response text that is about to arrive.
+  const streamingBubble = document.getElementById('streaming-bubble');
+  if (streamingBubble) {
+    messagesArea.insertBefore(statusDiv, streamingBubble);
+  } else {
+    messagesArea.appendChild(statusDiv);
+  }
+
+  messagesArea.scrollTop = messagesArea.scrollHeight;
+}
+
+/**
+ * Create a temporary "streaming" assistant bubble and return its content div.
+ * The bubble gets the id "streaming-bubble" so it can be found and removed later.
+ */
+function createStreamingBubble() {
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'message assistant streaming';
+  messageDiv.id = 'streaming-bubble';
+
+  const avatarDiv = document.createElement('div');
+  avatarDiv.className = 'message-avatar';
+  avatarDiv.textContent = 'AI';
+
+  const contentDiv = document.createElement('div');
+  contentDiv.className = 'message-content';
+
+  messageDiv.appendChild(avatarDiv);
+  messageDiv.appendChild(contentDiv);
+  messagesArea.appendChild(messageDiv);
+
+  setTimeout(() => {
+    messagesArea.scrollTop = messagesArea.scrollHeight;
+    messageDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, 50);
+
+  return contentDiv;
+}
+
+/**
+ * POST to /api/chat/stream, consume SSE, progressively render tokens.
+ * Returns the final conversationId assigned by the server.
+ */
+async function sendMessageStreaming(text, attachments, conversationId) {
+  const payload = { message: text, attachments, conversationId };
+  const userId = localStorage.getItem('userId');
+  if (userId) payload.userId = userId;
+
+  const response = await fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Stream request failed (${response.status})`);
+  }
+
+  const contentDiv = createStreamingBubble();
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+
+  let rawBuffer = '';   // incomplete SSE frame accumulator
+  let fullText = '';    // accumulates all chunk data for final render
+  let finalConvId = conversationId;
+  let streamDone = false;
+
+  try {
+    while (!streamDone) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      rawBuffer += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by a blank line (\n\n)
+      const parts = rawBuffer.split('\n\n');
+      rawBuffer = parts.pop(); // keep the last, potentially incomplete block
+
+      for (const part of parts) {
+        if (!part.trim()) continue;
+        const { event, data } = parseSseEvent(part);
+
+        if (event === 'meta') {
+          try {
+            const meta = JSON.parse(data);
+            if (meta.conversationId) {
+              finalConvId = meta.conversationId;
+              localStorage.setItem(state.conversationIdKey, String(finalConvId));
+            }
+          } catch (_) { /* ignore malformed meta */ }
+
+        } else if (event === 'status') {
+          // Backend emitted a progress notification (NEEDS_SEARCH path).
+          try {
+            const statusData = JSON.parse(data);
+            const code  = typeof statusData.code  === 'string' ? statusData.code  : 'info';
+            const label = typeof statusData.label === 'string' ? statusData.label : data;
+            addStatusMessage(code, label);
+          } catch (_) {
+            addStatusMessage('info', data);
+          }
+
+        } else if (event === 'chunk') {
+          // Remove the status indicator on the first real token — the response
+          // is now streaming and the progress bubble is no longer needed.
+          const statusIndicator = document.getElementById('status-indicator');
+          if (statusIndicator) statusIndicator.remove();
+
+          // Chunks are JSON-wrapped ({"text":"..."}) so token-leading whitespace
+          // ("of", " the", …) survives the SSE round-trip (the W3C spec strips
+          // a single leading space from raw data: payloads, which otherwise eats
+          // every space between streamed tokens).
+          let piece = '';
+          try {
+            const parsed = JSON.parse(data);
+            piece = typeof parsed === 'object' && parsed !== null && typeof parsed.text === 'string'
+              ? parsed.text
+              : String(data);
+          } catch (_) {
+            // Tolerate legacy/raw chunks for backward compatibility
+            piece = data;
+          }
+          fullText += piece;
+          // Progressive markdown rendering — kubectl/docker/helm command boxes,
+          // code fences, lists and inline formatting appear in real time as the
+          // stream progresses, instead of waiting for the final replacement bubble.
+          contentDiv.innerHTML = renderMarkdown(fullText);
+          attachCopyListeners(contentDiv);
+          messagesArea.scrollTop = messagesArea.scrollHeight;
+
+        } else if (event === 'done') {
+          streamDone = true;
+          break;
+
+        } else if (event === 'error') {
+          fullText = `Error: ${data}`;
+          streamDone = true;
+          break;
+        }
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+
+  // Clean up any lingering status indicator (e.g. if stream ended before first token).
+  const statusIndicator = document.getElementById('status-indicator');
+  if (statusIndicator) statusIndicator.remove();
+
+  // Replace the streaming bubble with a properly formatted message bubble
+  // (includes markdown rendering + feedback buttons).
+  const streamingBubble = document.getElementById('streaming-bubble');
+  if (streamingBubble) streamingBubble.remove();
+
+  addMessage(fullText || "I couldn't process that request.", 'assistant');
+  loadChatHistoryIntoTab();
+
+  return finalConvId;
+}
+
 // ----- submit handler
 async function handleSubmit(ev) {
   ev.preventDefault();
@@ -291,7 +509,7 @@ async function handleSubmit(ev) {
 
   if (!message && !hasAttachments) return;
 
-  // Enforce message length limit (mirror KdiagModels and backend Chat.userMessage)
+  // Enforce message length limit (mirrors KdiagModels.Message and backend Chat.userMessage)
   if (message.length > MAX_MESSAGE_LENGTH) {
     addMessage(`Error: Message exceeds maximum length of ${MAX_MESSAGE_LENGTH} characters. Current: ${message.length}`, 'assistant');
     return;
@@ -300,38 +518,51 @@ async function handleSubmit(ev) {
   hideWelcomeHeader();
   autoCollapseSidebar();
 
-  // Render user bubble + attachments chips (do not inline content)
+  // Render user bubble immediately
   addUserMessageWithAttachments(message || '', filesSnapshot, false);
 
   promptInput.value = '';
   promptInput.style.height = 'auto';
 
-  // send snapshot, then clear draft
   const payloadAttachments = filesSnapshot;
   clearDraftAttachments();
 
-  showTypingIndicator();
+  const conversationId = getOrCreateConversationId();
 
-  try {
-    const payload = { message, attachments: payloadAttachments };
-    const userId = localStorage.getItem('userId');
-    if (userId) payload.userId = userId;
-    payload.conversationId = getOrCreateConversationId();
-
-    const { resp, data } = await postChat(payload);
-
-    removeTypingIndicator();
-    if (resp.ok) {
-      if (data?.conversationId) localStorage.setItem(state.conversationIdKey, String(data.conversationId));
-      addMessage(data?.response || "I couldn't process that request.", 'assistant');
-      loadChatHistoryIntoTab();
-    } else {
-      const msg = data?.message || data?.error || `Request failed (${resp.status})`;
-      addMessage(`Error: ${msg}`, 'assistant');
+  if (STREAMING_ENABLED) {
+    // ── Streaming path ──
+    try {
+      await sendMessageStreaming(message, payloadAttachments, conversationId);
+    } catch (e) {
+      // Remove any half-created streaming bubble and show an error message
+      const bubble = document.getElementById('streaming-bubble');
+      if (bubble) bubble.remove();
+      addMessage('Error: Could not stream response from server. Make sure the backend is running.', 'assistant');
     }
-  } catch (e) {
-    removeTypingIndicator();
-    addMessage('Error: Could not connect to the server. Make sure the backend is running.', 'assistant');
+  } else {
+    // ── Non-streaming (legacy) path ──
+    showTypingIndicator();
+    try {
+      const payload = { message, attachments: payloadAttachments };
+      const userId = localStorage.getItem('userId');
+      if (userId) payload.userId = userId;
+      payload.conversationId = conversationId;
+
+      const { resp, data } = await postChat(payload);
+
+      removeTypingIndicator();
+      if (resp.ok) {
+        if (data?.conversationId) localStorage.setItem(state.conversationIdKey, String(data.conversationId));
+        addMessage(data?.response || "I couldn't process that request.", 'assistant');
+        loadChatHistoryIntoTab();
+      } else {
+        const msg = data?.message || data?.error || `Request failed (${resp.status})`;
+        addMessage(`Error: ${msg}`, 'assistant');
+      }
+    } catch (e) {
+      removeTypingIndicator();
+      addMessage('Error: Could not connect to the server. Make sure the backend is running.', 'assistant');
+    }
   }
 }
 

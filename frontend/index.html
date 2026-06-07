@@ -62,6 +62,10 @@
                         <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></span>
                         <span class="text">Nodes</span>
                     </button>
+                    <button class="nav-item" data-tab="topology">
+                        <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7" y1="8.5" x2="11" y2="15.5"/><line x1="17" y1="8.5" x2="13" y2="15.5"/></svg></span>
+                        <span class="text">Topology</span>
+                    </button>
                 </div>
 
                 <div class="nav-section">
@@ -252,6 +256,20 @@
                                 <option value="kube-node-lease">kube-node-lease</option>
                             </select>
                         </div>
+                        <div class="filter-group">
+                            <label class="check-pill" style="margin-top:1.65rem;">
+                                <input type="checkbox" id="pods-multi-toggle" /> <span>🔀 Multi-cluster mode</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div id="pods-multi-picker" class="filter-panel" style="display:none;">
+                        <div class="filter-group" style="grid-column: 1 / -1;">
+                            <label class="filter-label">Select up to 5 clusters</label>
+                            <label class="check-pill pods-multi-shared-toggle" style="margin-top:0.6rem;">
+                                <input type="checkbox" id="pods-multi-shared-namespace" checked /> <span>Same namespace for all clusters</span>
+                            </label>
+                            <div id="pods-multi-cluster-list" class="multi-cluster-picker"></div>
+                        </div>
                     </div>
 
                     <div id="pods-bulk-options" class="bulk-toolbar" style="display: none;">
@@ -316,6 +334,17 @@
                                 <option value="">— Loading clusters... —</option>
                             </select>
                         </div>
+                        <div class="filter-group">
+                            <label class="check-pill" style="margin-top:1.65rem;">
+                                <input type="checkbox" id="nodes-multi-toggle" /> <span>🔀 Multi-cluster mode</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div id="nodes-multi-picker" class="filter-panel" style="display:none;">
+                        <div class="filter-group" style="grid-column: 1 / -1;">
+                            <label class="filter-label">Select up to 5 clusters</label>
+                            <div id="nodes-multi-cluster-list" class="multi-cluster-picker"></div>
+                        </div>
                     </div>
 
                     <div id="nodes-bulk-options" class="bulk-toolbar" style="display: none;">
@@ -352,6 +381,76 @@
                         <div class="spinner" aria-hidden="true"></div>
                         <p>Scanning your cluster…</p>
                     </div>
+                </section>
+            </div>
+
+            <!-- ====================================================
+                 Topology tab
+                 ==================================================== -->
+            <div id="topology" class="tab-content">
+                <section class="page topology-page">
+                    <header class="page-header">
+                        <div class="page-header-text">
+                            <h1 class="page-title">Cluster topology</h1>
+                            <p class="page-subtitle">Auto-detected cross-cluster links (Submariner, Linkerd). Pull live context across multiple clusters at once.</p>
+                        </div>
+                        <div class="page-header-actions">
+                            <button id="topology-refresh-btn" class="btn-secondary btn-with-icon" title="Refresh clusters &amp; counts">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                <span>Refresh</span>
+                            </button>
+                            <button id="topology-discover-btn" class="btn-primary btn-with-icon" title="Scan CRDs to detect cross-cluster links">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                <span>Discover Links</span>
+                            </button>
+                        </div>
+                    </header>
+
+                    <div class="topology-layout">
+                        <div id="topology-canvas" class="topology-canvas">
+                            <div id="topology-loading" class="topology-loading">
+                                <div class="spinner" aria-hidden="true"></div>
+                                <p>Loading topology…</p>
+                            </div>
+                        </div>
+
+                        <aside id="topology-side" class="topology-side">
+                            <div id="topology-side-empty" class="topology-side-empty">
+                                <p>👉 Click on a cluster or a link in the map to see details and actions.</p>
+                                <p style="opacity:0.7; font-size:0.85rem; margin-top:0.5rem;">Tip: select up to 5 clusters to gather context from all of them at once.</p>
+                            </div>
+                            <div id="topology-side-content" class="topology-side-content" hidden></div>
+                        </aside>
+                    </div>
+
+                    <div id="topology-basket" class="topology-basket" hidden>
+                        <div class="topology-basket-header">
+                            <strong>Multi-cluster basket</strong>
+                            <span class="topology-basket-count">(<span id="topology-basket-count">0</span>/5)</span>
+                            <button id="topology-basket-clear" class="btn-helper" type="button">Clear</button>
+                        </div>
+                        <div id="topology-basket-chips" class="topology-basket-chips"></div>
+                        <div class="topology-basket-actions">
+                            <label class="check-pill topology-basket-shared-toggle">
+                                <input type="checkbox" id="topology-basket-shared-namespace" checked /> <span>Same namespace for all clusters</span>
+                            </label>
+                            <div id="topology-basket-shared-wrap" class="topology-basket-shared-wrap">
+                                <label class="filter-label" for="topology-basket-namespace">Namespace</label>
+                                <select id="topology-basket-namespace" class="form-control" style="max-width:200px;">
+                                    <option value="default">default</option>
+                                </select>
+                            </div>
+                            <button id="topology-basket-scan-pods" class="btn-primary btn-with-icon" type="button">
+                                <span>Scan pods on selected</span>
+                            </button>
+                            <button id="topology-basket-scan-nodes" class="btn-secondary btn-with-icon" type="button">
+                                <span>Scan nodes on selected</span>
+                            </button>
+                        </div>
+                        <div id="topology-basket-cluster-namespaces" class="topology-basket-cluster-namespaces" hidden></div>
+                    </div>
+
+                    <div id="topology-multi-results" class="topology-multi-results" hidden></div>
                 </section>
             </div>
 
@@ -700,6 +799,7 @@
         </div>
     </div>
 
+    <script src="vendor/vis-network.min.js"></script>
     <script type="module" src="js/main.js"></script>
 </body>
 

@@ -18,6 +18,7 @@ export async function refreshClusters() {
   }
   renderClusterDropdowns();
   renderClusterManager();
+  document.dispatchEvent(new CustomEvent('clusters:refreshed', { detail: { count: state.clusters.length } }));
 }
 
 /**

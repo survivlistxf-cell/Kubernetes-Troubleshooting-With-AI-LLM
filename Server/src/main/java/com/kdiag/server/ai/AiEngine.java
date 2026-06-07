@@ -1,9 +1,11 @@
 package com.kdiag.server.ai;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
@@ -14,9 +16,21 @@ import java.util.concurrent.Executors;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
+import reactor.core.scheduler.Schedulers;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
+import com.kdiag.server.ai.feedback.FeedbackRetrievalService;
+import com.kdiag.server.ai.history.HistoryService;
+import com.kdiag.server.ai.stream.StreamChunk;
 import com.kdiag.server.docs.KubernetesDocsScraper;
 import com.kdiag.server.docs.KubernetesDynamicSearcher;
+import com.kdiag.server.metrics.MetricsCollector;
 import com.kdiag.server.ollama.OllamaClient;
 import com.kdiag.server.protocol.KdiagModels.Artifact;
 
@@ -30,14 +44,22 @@ import com.kdiag.server.protocol.KdiagModels.Artifact;
 public class AiEngine {
 
     private static final Logger logger = LoggerFactory.getLogger(AiEngine.class);
-    private static final int MAX_RECENT_HISTORY_MESSAGES = 12;
+    private static final int MAX_RECENT_HISTORY_MESSAGES     = 12;
     private static final int SUMMARY_TRIGGER_HISTORY_MESSAGES = 10;
-    private static final int MAX_RETRIEVAL_SNIPPET_CHARS = 200;
-    private static final int MAX_ARTIFACTS_PER_REQUEST = 5;
-    private static final int MAX_ARTIFACT_PROMPT_CHARS = 3000;
-    private static final int MAX_TOTAL_PROMPT_CHARS = 32000;
-    private static final int MAX_SUMMARY_INPUT_MESSAGES = 12;
-    private static final int MAX_SUMMARY_CHARS = 1600;
+    private static final int MAX_RETRIEVAL_SNIPPET_CHARS      = 400;
+    private static final int MAX_TOTAL_PROMPT_CHARS           = 28000;
+    private static final int MAX_SUMMARY_INPUT_MESSAGES       = 12;
+    private static final int MAX_SUMMARY_CHARS                = 1600;
+    private static final int NEEDS_SEARCH_BUFFER_CHARS        = 256;
+    private static final String NEEDS_SEARCH_OPEN  = "[NEEDS_SEARCH:";
+    private static final String NEEDS_SEARCH_CLOSE = "]";
+
+    // Size-based artifact budget constants
+    private static final int    MAX_TOTAL_ARTIFACT_CHARS = 15000;
+    private static final int    MIN_RAG_CHARS            = 6000;
+    private static final int    MAX_RAG_CHARS            = 14000;
+    private static final double ARTIFACT_TO_RAG_RATIO    = 0.5;
+
     private final ExecutorService summaryExecutor = Executors.newFixedThreadPool(2, runnable -> {
         Thread thread = new Thread(runnable, "kdiag-summary-worker");
         thread.setDaemon(true);
@@ -46,14 +68,21 @@ public class AiEngine {
     private final OllamaClient ollama;
     private final KubernetesDocsScraper docsScraper;
     private final KubernetesDynamicSearcher dynamicSearcher;
-    private final com.kdiag.server.ai.history.HistoryService historyService;
+    private final HistoryService historyService;
+    private final FeedbackRetrievalService feedbackRetrievalService;
+    private final MetricsCollector metrics;
 
-    public AiEngine(OllamaClient ollama, KubernetesDocsScraper docsScraper, KubernetesDynamicSearcher dynamicSearcher,
-            com.kdiag.server.ai.history.HistoryService historyService) {
+    public AiEngine(OllamaClient ollama, KubernetesDocsScraper docsScraper,
+            KubernetesDynamicSearcher dynamicSearcher,
+            HistoryService historyService,
+            FeedbackRetrievalService feedbackRetrievalService,
+            MetricsCollector metrics) {
         this.ollama = ollama;
         this.docsScraper = docsScraper;
         this.dynamicSearcher = dynamicSearcher;
         this.historyService = historyService;
+        this.feedbackRetrievalService = feedbackRetrievalService;
+        this.metrics = metrics;
     }
 
     private void debugLog(String msg) {
@@ -65,40 +94,116 @@ public class AiEngine {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Artifact budget
+    // -------------------------------------------------------------------------
+
+    /** Per-request artifact allocation computed by {@link #computeArtifactBudget}. */
+    record ArtifactBudget(int[] perArtifactChars, int totalArtifactChars, int ragChars) {}
+
+    /**
+     * FIFO size-based allocation: each artifact gets min(rawLen, remaining capacity).
+     * Total artifact chars are capped at MAX_TOTAL_ARTIFACT_CHARS.
+     * RAG chars are dynamically reduced by ARTIFACT_TO_RAG_RATIO per artifact char consumed,
+     * floored at MIN_RAG_CHARS.
+     */
+    ArtifactBudget computeArtifactBudget(List<Artifact> artifacts) {
+        if (artifacts == null || artifacts.isEmpty()) {
+            return new ArtifactBudget(new int[0], 0, MAX_RAG_CHARS);
+        }
+        int[] alloc = new int[artifacts.size()];
+        int used = 0;
+        for (int i = 0; i < artifacts.size(); i++) {
+            Artifact a = artifacts.get(i);
+            int rawLen = (a == null || a.getContent() == null) ? 0 : a.getContent().length();
+            int remaining = MAX_TOTAL_ARTIFACT_CHARS - used;
+            if (remaining <= 0) { alloc[i] = 0; continue; }
+            alloc[i] = Math.min(rawLen, remaining);
+            used += alloc[i];
+        }
+        int ragChars = Math.max(MIN_RAG_CHARS,
+                MAX_RAG_CHARS - (int) Math.round(used * ARTIFACT_TO_RAG_RATIO));
+        return new ArtifactBudget(alloc, used, ragChars);
+    }
+
+    // -------------------------------------------------------------------------
+    // solve() — non-streaming
+    // -------------------------------------------------------------------------
+
     public AiResult solve(String conversationId, String userText, List<Artifact> artifacts) {
+        final long solveStart = System.currentTimeMillis();
         debugLog("[AiEngine] solve() convId=" + conversationId + " userText=" + userText + " artSize="
                 + (artifacts != null ? artifacts.size() : 0));
+
         // 1. Process and split artifacts (especially .txt files with multiple sections)
         List<Artifact> processedArtifacts = processArtifacts(artifacts);
-        List<Artifact> promptArtifacts = limitArtifacts(processedArtifacts, MAX_ARTIFACTS_PER_REQUEST);
 
-        // 2. Fetch relevant docs
-        String relevantDocs = fetchRelevantDocs(userText, promptArtifacts);
+        // 1a. Compute size-based budget
+        ArtifactBudget budget = computeArtifactBudget(processedArtifacts);
+        int rawTotal = processedArtifacts.stream()
+                .mapToInt(a -> (a == null || a.getContent() == null) ? 0 : a.getContent().length())
+                .sum();
+        logger.info("Artifact budget: rawTotal={}, allocated={}, ragChars={}, perArtifact={}",
+                rawTotal, budget.totalArtifactChars(), budget.ragChars(),
+                Arrays.toString(budget.perArtifactChars()));
+
+        // 1b. CBR read: load boosted URLs + retrieve similar past cases
+        Set<String> boostedUrls = feedbackRetrievalService.getBoostedUrls();
+        List<FeedbackRetrievalService.SimilarCase> similarCases =
+                (userText != null && !userText.isBlank())
+                        ? feedbackRetrievalService.findSimilarCases(userText)
+                        : List.of();
+
+        // 2. Fetch relevant docs (boost-aware, dynamic ragChars)
+        String relevantDocs = fetchRelevantDocs(userText, processedArtifacts, boostedUrls,
+                budget.ragChars());
 
         // 3. Build current user message content
-        String userContent = buildUserPrompt(userText, promptArtifacts);
+        String userContent = buildUserPrompt(userText, processedArtifacts,
+                budget.perArtifactChars());
+
+        // 3b. Artifact bank management
+        List<HistoryService.BankedArtifact> bank;
+        if (conversationId != null) {
+            if (!processedArtifacts.isEmpty()) {
+                long currentTurn = historyService.addArtifacts(conversationId, processedArtifacts);
+                bank = historyService.getBankedArtifactsBefore(conversationId, currentTurn);
+            } else {
+                bank = historyService.getBankedArtifacts(conversationId);
+            }
+        } else {
+            bank = List.of();
+        }
 
         // 4. Update history with user message
         if (conversationId != null) {
             debugLog("[AiEngine] Adding user turn to history for " + conversationId);
-            historyService.addEntry(conversationId, "user", userContent); // memorie pe termen scurt (cache backend)
+            historyService.addEntry(conversationId, "user", userContent);
             historyService.trimHistoryToLatest(conversationId, MAX_RECENT_HISTORY_MESSAGES);
         }
 
         // 5. Build full message list for Ollama
         List<Map<String, String>> messages = new java.util.ArrayList<>();
-        String conversationSummary = conversationId != null ? historyService.getConversationSummary(conversationId) : null;
-        String systemPrompt = buildSystemPrompt(relevantDocs, conversationSummary);
+        String conversationSummary = conversationId != null
+                ? historyService.getConversationSummary(conversationId) : null;
+        boolean isFirstTurn = conversationId == null
+                || historyService.getHistory(conversationId).size() <= 1;
+        logger.debug("System prompt tier: {} (history size={})",
+                isFirstTurn ? "full" : "compact",
+                conversationId == null ? -1 : historyService.getHistory(conversationId).size());
+
+        String systemPrompt = buildSystemPrompt(relevantDocs, conversationSummary, similarCases,
+                bank, isFirstTurn);
         int remainingBudget = MAX_TOTAL_PROMPT_CHARS;
         messages.add(Map.of("role", "system", "content", systemPrompt));
         remainingBudget -= systemPrompt.length();
 
         if (conversationId != null) {
-            List<com.kdiag.server.ai.history.HistoryService.HistoryEntry> historyEntries = historyService
-                    .getHistory(conversationId); // extragem toate mesajele anterioare din cache
+            List<HistoryService.HistoryEntry> historyEntries = historyService
+                    .getHistory(conversationId);
             debugLog("[AiEngine] History for [" + conversationId + "] has " + historyEntries.size() + " entries.");
             for (int i = 0; i < historyEntries.size(); i++) {
-                com.kdiag.server.ai.history.HistoryService.HistoryEntry entry = historyEntries.get(i);
+                HistoryService.HistoryEntry entry = historyEntries.get(i);
                 String content = entry.content();
                 if (content == null || content.isBlank()) {
                     continue;
@@ -119,6 +224,12 @@ public class AiEngine {
 
         debugLog("[AiEngine] Final message list size: " + messages.size());
 
+        // Count assembled prompt chars and flag near-overflow early
+        final int solvePromptChars = messages.stream()
+                .mapToInt(msg -> msg.getOrDefault("content", "").length())
+                .sum();
+        metrics.recordNumCtxOverflowIfApplicable(solvePromptChars, ollama.getNumCtx());
+
         String llm = null;
         try {
             logger.info("Sending {} messages to Ollama for conversation {}", messages.size(), conversationId);
@@ -127,12 +238,15 @@ public class AiEngine {
             logger.error("Ollama call failed", e);
         }
 
-        String assistantText = (llm == null || llm.isBlank())
+        final boolean usedFallback = (llm == null || llm.isBlank());
+        String assistantText = usedFallback
                 ? fallbackAnswer(userText, processedArtifacts, relevantDocs)
                 : llm.trim();
+        if (usedFallback) metrics.recordFallbackResponse();
 
         // --- SECONDARY DYNAMIC RAG LOOP ---
         if (assistantText.contains("[NEEDS_SEARCH:")) {
+            metrics.recordNeedsSearchTrigger();
             int startIdx = assistantText.indexOf("[NEEDS_SEARCH:") + 14;
             int endIdx = assistantText.indexOf("]", startIdx);
             if (endIdx != -1) {
@@ -142,12 +256,10 @@ public class AiEngine {
                 String dynamicDocsText = dynamicSearcher.searchAndSave(conversationId, query);
 
                 if (!dynamicDocsText.isBlank()) {
-                    // Update context and query again
                     messages.add(Map.of("role", "assistant", "content", assistantText));
                     messages.add(Map.of("role", "user", "content",
                             "Here is additional documentation from Kubernetes website based on your search:\n\n"
                                     + dynamicDocsText + "\n\nPlease solve the user's issue now."));
-
                     try {
                         logger.info("Sending secondary request to Ollama with dynamic docs context...");
                         assistantText = ollama.chat(messages).trim();
@@ -173,10 +285,302 @@ public class AiEngine {
             historyService.addEntry(conversationId, "assistant", assistantText);
             historyService.trimHistoryToLatest(conversationId, MAX_RECENT_HISTORY_MESSAGES);
             maybeScheduleConversationSummary(conversationId);
+
+            try {
+                feedbackRetrievalService.recordExchange(conversationId, userText, assistantText, null);
+            } catch (Exception e) {
+                logger.warn("Failed to record QA exchange for {}: {}", conversationId, e.getMessage());
+            }
         }
 
+        metrics.recordChatRequest(System.currentTimeMillis() - solveStart,
+                solvePromptChars, assistantText.length());
         return new AiResult(assistantText, null);
     }
+
+    // -------------------------------------------------------------------------
+    // Streaming path
+    // -------------------------------------------------------------------------
+
+    /**
+     * Like {@link #solve} but returns a {@link Flux} of token strings for SSE streaming.
+     *
+     * <p>Setup steps (history, RAG, prompt assembly) run synchronously before subscription.
+     * History persistence happens in {@code doFinally} so it fires regardless of how the
+     * stream ends (complete / cancel).  On error, {@code onErrorResume} emits the full
+     * fallback answer as a single token so the client still sees a useful response.
+     *
+     * <p>The first {@value #NEEDS_SEARCH_BUFFER_CHARS} characters are buffered internally
+     * by {@link #wrapWithDynamicSearchLoop}.  If a {@code [NEEDS_SEARCH: query]} marker is
+     * detected the original stream is cancelled, {@link KubernetesDynamicSearcher#searchAndSave}
+     * runs on a bounded-elastic thread, and a fresh Ollama stream with the augmented prompt
+     * is substituted transparently.  If no marker is found the buffer is flushed and
+     * subsequent tokens pass through unchanged.
+     */
+    public Flux<StreamChunk> solveStream(String conversationId, String userText, List<Artifact> artifacts) {
+        final long streamSolveStart = System.currentTimeMillis();
+        debugLog("[AiEngine] solveStream() convId=" + conversationId + " userText=" + userText);
+
+        // 1. Artifact processing
+        List<Artifact> processedArtifacts = processArtifacts(artifacts);
+
+        // 1a. Compute size-based budget
+        ArtifactBudget budget = computeArtifactBudget(processedArtifacts);
+        int rawTotal = processedArtifacts.stream()
+                .mapToInt(a -> (a == null || a.getContent() == null) ? 0 : a.getContent().length())
+                .sum();
+        logger.info("Artifact budget: rawTotal={}, allocated={}, ragChars={}, perArtifact={}",
+                rawTotal, budget.totalArtifactChars(), budget.ragChars(),
+                Arrays.toString(budget.perArtifactChars()));
+
+        // 1b. CBR read: load boosted URLs + retrieve similar past cases
+        Set<String> boostedUrls = feedbackRetrievalService.getBoostedUrls();
+        List<FeedbackRetrievalService.SimilarCase> similarCases =
+                (userText != null && !userText.isBlank())
+                        ? feedbackRetrievalService.findSimilarCases(userText)
+                        : List.of();
+
+        // 2. RAG context (boost-aware, dynamic ragChars)
+        final String relevantDocs = fetchRelevantDocs(userText, processedArtifacts, boostedUrls,
+                budget.ragChars());
+
+        // 3. User prompt content
+        String userContent = buildUserPrompt(userText, processedArtifacts,
+                budget.perArtifactChars());
+
+        // 3b. Artifact bank management
+        List<HistoryService.BankedArtifact> bank;
+        if (conversationId != null) {
+            if (!processedArtifacts.isEmpty()) {
+                long currentTurn = historyService.addArtifacts(conversationId, processedArtifacts);
+                bank = historyService.getBankedArtifactsBefore(conversationId, currentTurn);
+            } else {
+                bank = historyService.getBankedArtifacts(conversationId);
+            }
+        } else {
+            bank = List.of();
+        }
+
+        // 4. Add user turn to history
+        if (conversationId != null) {
+            historyService.addEntry(conversationId, "user", userContent);
+            historyService.trimHistoryToLatest(conversationId, MAX_RECENT_HISTORY_MESSAGES);
+        }
+
+        // 5. Build message list
+        List<Map<String, String>> messages = new java.util.ArrayList<>();
+        String conversationSummary = conversationId != null
+                ? historyService.getConversationSummary(conversationId) : null;
+        boolean isFirstTurn = conversationId == null
+                || historyService.getHistory(conversationId).size() <= 1;
+        logger.debug("System prompt tier: {} (history size={})",
+                isFirstTurn ? "full" : "compact",
+                conversationId == null ? -1 : historyService.getHistory(conversationId).size());
+
+        String systemPrompt = buildSystemPrompt(relevantDocs, conversationSummary, similarCases,
+                bank, isFirstTurn);
+        int remainingBudget = MAX_TOTAL_PROMPT_CHARS;
+        messages.add(Map.of("role", "system", "content", systemPrompt));
+        remainingBudget -= systemPrompt.length();
+
+        if (conversationId != null) {
+            for (HistoryService.HistoryEntry entry : historyService.getHistory(conversationId)) {
+                String content = entry.content();
+                if (content == null || content.isBlank() || remainingBudget <= 0) continue;
+                String clipped = truncateToBudget(content, remainingBudget);
+                messages.add(Map.of("role", entry.role(), "content", clipped));
+                remainingBudget -= clipped.length();
+            }
+        } else {
+            messages.add(Map.of("role", "user",
+                    "content", truncateToBudget(userContent, remainingBudget)));
+        }
+
+        // Capture finals for lambdas
+        final String convId = conversationId;
+        final String finalUserText = userText;
+        final List<Artifact> finalProcessed = processedArtifacts;
+        final StringBuilder buffer = new StringBuilder();
+
+        // Prompt size snapshot (before streaming starts)
+        final int streamPromptChars = messages.stream()
+                .mapToInt(msg -> msg.getOrDefault("content", "").length())
+                .sum();
+        metrics.recordNumCtxOverflowIfApplicable(streamPromptChars, ollama.getNumCtx());
+
+        logger.info("Starting streaming Ollama call for conversation {}", convId);
+
+        return wrapWithDynamicSearchLoop(convId, messages, ollama.chatStream(messages))
+                .doOnNext(chunk -> {
+                    if (chunk.type() == StreamChunk.Type.TOKEN && chunk.text() != null) {
+                        buffer.append(chunk.text());
+                    }
+                })
+                .onErrorResume(e -> {
+                    logger.error("Streaming Ollama call failed for conversation {}", convId, e);
+                    String fallback = fallbackAnswer(finalUserText, finalProcessed, relevantDocs);
+                    if (convId != null && !fallback.isBlank()) {
+                        historyService.addEntry(convId, "assistant", fallback);
+                        historyService.trimHistoryToLatest(convId, MAX_RECENT_HISTORY_MESSAGES);
+                        maybeScheduleConversationSummary(convId);
+                    }
+                    return Flux.just(StreamChunk.token(fallback));
+                })
+                .doFinally(signal -> {
+                    if (signal == SignalType.ON_ERROR) return;
+                    String assistantText = buffer.toString().trim();
+                    if (!assistantText.isBlank()) {
+                        metrics.recordStreamingRequest(
+                                System.currentTimeMillis() - streamSolveStart,
+                                streamPromptChars,
+                                assistantText.length());
+                    }
+                    if (assistantText.isBlank() || convId == null) return;
+                    historyService.addEntry(convId, "assistant", assistantText);
+                    historyService.trimHistoryToLatest(convId, MAX_RECENT_HISTORY_MESSAGES);
+                    maybeScheduleConversationSummary(convId);
+                    try {
+                        feedbackRetrievalService.recordExchange(convId, finalUserText, assistantText, null);
+                    } catch (Exception e) {
+                        logger.warn("Failed to record streaming QA exchange for {}: {}", convId, e.getMessage());
+                    }
+                });
+    }
+
+    // -------------------------------------------------------------------------
+    // Streaming NEEDS_SEARCH detection loop
+    // -------------------------------------------------------------------------
+
+    /**
+     * Wraps {@code firstStream} with a detection window for the
+     * {@code [NEEDS_SEARCH: query]} marker.
+     *
+     * <p>Tokens are buffered silently until either {@value #NEEDS_SEARCH_BUFFER_CHARS}
+     * characters have been collected <em>or</em> the close bracket of a found open-marker
+     * arrives — whichever comes first.  Then one of two branches executes:
+     * <ul>
+     *   <li><b>Marker found</b> — the first stream is disposed and
+     *       {@link #startSecondStream} is called with the extracted query.</li>
+     *   <li><b>No marker</b> — the accumulated buffer is flushed as one token and
+     *       subsequent tokens pass through unchanged.</li>
+     * </ul>
+     */
+    private Flux<StreamChunk> wrapWithDynamicSearchLoop(
+            String convId,
+            List<Map<String, String>> originalMessages,
+            Flux<String> firstStream) {
+
+        return Flux.create(sink -> {
+            AtomicBoolean decided  = new AtomicBoolean(false);
+            AtomicBoolean replaced = new AtomicBoolean(false);
+            AtomicReference<Disposable> subRef = new AtomicReference<>();
+            StringBuilder buf = new StringBuilder();
+
+            Disposable d = firstStream.subscribe(
+                token -> {
+                    if (replaced.get()) return;
+
+                    if (decided.get()) {
+                        sink.next(StreamChunk.token(token));
+                        return;
+                    }
+
+                    buf.append(token);
+
+                    int openIdx = buf.indexOf(NEEDS_SEARCH_OPEN);
+                    boolean bufFull = buf.length() >= NEEDS_SEARCH_BUFFER_CHARS;
+                    boolean markerClosed = openIdx != -1
+                            && buf.indexOf(NEEDS_SEARCH_CLOSE, openIdx + NEEDS_SEARCH_OPEN.length()) != -1;
+
+                    if (!bufFull && !markerClosed) return;
+
+                    if (markerClosed) {
+                        int closeIdx = buf.indexOf(NEEDS_SEARCH_CLOSE, openIdx + NEEDS_SEARCH_OPEN.length());
+                        String query = buf.substring(openIdx + NEEDS_SEARCH_OPEN.length(), closeIdx).trim();
+                        decided.set(true);
+                        replaced.set(true);
+                        Disposable current = subRef.get();
+                        if (current != null) current.dispose();
+                        startSecondStream(convId, originalMessages, query, sink);
+                        return;
+                    }
+
+                    decided.set(true);
+                    sink.next(StreamChunk.token(buf.toString()));
+                },
+                e -> { if (!replaced.get()) sink.error(e); },
+                () -> {
+                    if (replaced.get()) return;
+                    if (!decided.get()) {
+                        String content = buf.toString();
+                        int openIdx = content.indexOf(NEEDS_SEARCH_OPEN);
+                        if (openIdx != -1) {
+                            int closeIdx = content.indexOf(NEEDS_SEARCH_CLOSE,
+                                    openIdx + NEEDS_SEARCH_OPEN.length());
+                            if (closeIdx != -1) {
+                                String query = content.substring(
+                                        openIdx + NEEDS_SEARCH_OPEN.length(), closeIdx).trim();
+                                decided.set(true);
+                                replaced.set(true);
+                                startSecondStream(convId, originalMessages, query, sink);
+                                return;
+                            }
+                        }
+                        if (!content.isBlank()) sink.next(StreamChunk.token(content));
+                    }
+                    sink.complete();
+                }
+            );
+            subRef.set(d);
+            sink.onCancel(d::dispose);
+            sink.onDispose(d::dispose);
+        });
+    }
+
+    /**
+     * Runs {@link KubernetesDynamicSearcher#searchAndSave} on a
+     * {@link Schedulers#boundedElastic()} thread (blocking call, must not run on Netty
+     * event-loop), then starts a fresh Ollama streaming call with the retrieved docs
+     * appended and pipes its tokens into {@code sink}.
+     */
+    private void startSecondStream(String convId,
+                                   List<Map<String, String>> originalMessages,
+                                   String searchQuery,
+                                   FluxSink<StreamChunk> sink) {
+        logger.info("[stream] NEEDS_SEARCH triggered, query='{}'", searchQuery);
+        metrics.recordNeedsSearchTrigger();
+
+        // Notify the frontend that a dynamic search is in progress.
+        sink.next(StreamChunk.status("searching", "Se caută documentație suplimentară..."));
+
+        Mono.fromCallable(() -> dynamicSearcher.searchAndSave(convId, searchQuery))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMapMany(dynamicDocs -> {
+                    List<Map<String, String>> augmented = new java.util.ArrayList<>(originalMessages);
+                    if (dynamicDocs != null && !dynamicDocs.isBlank()) {
+                        sink.next(StreamChunk.status("search_done",
+                                "Documentație găsită. Se generează răspunsul..."));
+                        augmented.add(Map.of("role", "user",
+                                "content",
+                                "Here is additional documentation from Kubernetes website based on your search:\n\n"
+                                        + dynamicDocs
+                                        + "\n\nPlease solve the user's issue now."));
+                    } else {
+                        logger.info("[stream] Dynamic search returned nothing; asking LLM to continue without it.");
+                        sink.next(StreamChunk.status("search_empty",
+                                "Căutarea nu a returnat rezultate. Se generează răspunsul..."));
+                        augmented.add(Map.of("role", "user",
+                                "content",
+                                "Search yielded no new results. Please provide your best diagnosis or advice."));
+                    }
+                    return ollama.chatStream(augmented);
+                })
+                .subscribe(token -> sink.next(StreamChunk.token(token)), sink::error, sink::complete);
+    }
+
+    // -------------------------------------------------------------------------
+    // Artifact processing
+    // -------------------------------------------------------------------------
 
     private List<Artifact> processArtifacts(List<Artifact> artifacts) {
         if (artifacts == null)
@@ -196,8 +600,6 @@ public class AiEngine {
         List<Artifact> parts = new java.util.ArrayList<>();
         String content = original.getContent();
 
-        // Simple regex split based on Common patterns like --- kubectl describe --- or
-        // --- Logs ---
         String[] sections = content.split("(?m)^--- ");
         for (String section : sections) {
             if (section.isBlank())
@@ -222,7 +624,12 @@ public class AiEngine {
         return parts.isEmpty() ? List.of(original) : parts;
     }
 
-    private String fetchRelevantDocs(String userText, List<Artifact> artifacts) {
+    // -------------------------------------------------------------------------
+    // RAG and prompt builders
+    // -------------------------------------------------------------------------
+
+    private String fetchRelevantDocs(String userText, List<Artifact> artifacts,
+                                     Set<String> boostedUrls, int maxRagChars) {
         try {
             StringBuilder query = new StringBuilder(userText == null ? "" : userText);
             if (artifacts != null) {
@@ -230,8 +637,6 @@ public class AiEngine {
                     if (a != null && a.getType() != null) {
                         query.append(" ").append(a.getType());
                     }
-                    // creeaza un sir lung de text (max 200 caractere) in care pune cuvinte cheie
-                    // din fiecare fisier atasat + user text
                     if (a != null && a.getContent() != null) {
                         String snippet = a.getContent().length() > MAX_RETRIEVAL_SNIPPET_CHARS
                             ? a.getContent().substring(0, MAX_RETRIEVAL_SNIPPET_CHARS)
@@ -240,31 +645,82 @@ public class AiEngine {
                     }
                 }
             }
-            // query = "De ce crashuieste podul meu? pod_logs OOMKilled: container exceeded
+
+            String bm25Result = docsScraper.getRelevantDocsByBm25Boosted(
+                    query.toString(), maxRagChars, boostedUrls);
+            if (!bm25Result.isBlank()) {
+                return bm25Result;
+            }
             return docsScraper.getRelevantDocs(query.toString());
         } catch (Exception e) {
             logger.error("Failed to fetch docs (continuing without docs)", e);
-            return ""; // ← Continuă fără docs în loc să arunce eroare
+            return "";
         }
     }
 
-    private String buildSystemPrompt(String relevantDocs, String conversationSummary) {
+    /**
+     * Builds the system prompt.
+     * isFirstTurn=true → full verbose preamble.
+     * isFirstTurn=false → compact ~200-char preamble; dynamic sections always emitted in full.
+     */
+    private String buildSystemPrompt(String relevantDocs, String conversationSummary,
+                                     List<FeedbackRetrievalService.SimilarCase> similarCases,
+                                     List<HistoryService.BankedArtifact> bank,
+                                     boolean isFirstTurn) {
         StringBuilder sb = new StringBuilder();
-        sb.append("You are a Kubernetes diagnostics assistant.\n");
-        sb.append("Be direct and helpful.\n\n");
 
-        sb.append("IMPORTANT ACTIONS:\n");
-        sb.append(
-                "- If user asks to 'stop commands', 'no commands', or 'without commands': analyze only, suggest NO kubectl commands\n");
-        sb.append("- If user provides error messages or logs: explain what they mean\n");
-        sb.append("- Focus on understanding the problem first, not just solutions\n");
-        sb.append(
-                "- DYNAMIC SEARCH: If the current documentation context does not contain enough information to solve a complex or obscure issue, DO NOT invent a solution. Instead, output EXACTLY this string and nothing else: `[NEEDS_SEARCH: <query>]` where `<query>` is the short, exact term you want to search on kubernetes.io (e.g. `[NEEDS_SEARCH: nginx ingress 403 error]`). I will fetch the internet for you and return the documents.\n\n");
+        if (isFirstTurn) {
+            sb.append("You are a Kubernetes diagnostics assistant.\n");
+            sb.append("Be direct and helpful.\n\n");
+            sb.append("IMPORTANT ACTIONS:\n");
+            sb.append(
+                    "- If user asks to 'stop commands', 'no commands', or 'without commands': analyze only, suggest NO kubectl commands\n");
+            sb.append("- If user provides error messages or logs: explain what they mean\n");
+            sb.append("- Focus on understanding the problem first, not just solutions\n");
+            sb.append(
+                    "- DYNAMIC SEARCH: If the current documentation context does not contain enough information to solve a complex or obscure issue, DO NOT invent a solution. Instead, output EXACTLY this string and nothing else: `[NEEDS_SEARCH: <query>]` where `<query>` is the short, exact term you want to search on kubernetes.io (e.g. `[NEEDS_SEARCH: nginx ingress 403 error]`). I will fetch the internet for you and return the documents.\n\n");
+        } else {
+            sb.append("You are Kubexplain, the Kubernetes diagnostic assistant. Continue this conversation applying the same conventions established earlier: cite sources from the documentation block when referencing facts, output [NEEDS_SEARCH: query] if the available documentation is insufficient, and structure responses in readable markdown.\n\n");
+        }
 
         if (conversationSummary != null && !conversationSummary.isBlank()) {
             sb.append("Conversation summary so far:\n");
             sb.append(conversationSummary.trim());
             sb.append("\n\n");
+        }
+
+        // Case-based retrieval hits — positively-rated past Q&A pairs
+        if (similarCases != null && !similarCases.isEmpty()) {
+            StringBuilder casesBlock = new StringBuilder(
+                    "=== PREVIOUSLY SUCCESSFUL ANSWERS (use as guidance) ===\n");
+            int budget = 4000;
+            for (FeedbackRetrievalService.SimilarCase c : similarCases) {
+                if (budget <= 0) break;
+                String entry = String.format(Locale.ROOT,
+                        "User asked: %s\nAnswer: %s\nSimilarity: %.2f\n---\n",
+                        c.userQuestion(), c.aiResponse(), c.similarity());
+                if (entry.length() > budget) {
+                    entry = entry.substring(0, budget);
+                }
+                casesBlock.append(entry);
+                budget -= entry.length();
+            }
+            casesBlock.append("==========================================\n\n");
+            sb.append(casesBlock);
+            debugLog("[AiEngine] Similar cases injected: "
+                    + casesBlock.substring(0, Math.min(300, casesBlock.length())));
+        }
+
+        // Historical artifact bank (prior turns only — current turn is in the user message)
+        if (bank != null && !bank.isEmpty()) {
+            sb.append("## Reference artifacts attached earlier in this conversation\n");
+            sb.append("(These were uploaded by the user previously. Use them as context only if relevant to the current question.)\n\n");
+            for (HistoryService.BankedArtifact ba : bank) {
+                sb.append("[turn ").append(ba.turnNumber()).append(" - ")
+                  .append(ba.type()).append(" - ")
+                  .append(ba.filename()).append("]\n");
+                sb.append(ba.summary()).append("\n\n");
+            }
         }
 
         if (relevantDocs != null && !relevantDocs.isBlank()) {
@@ -276,42 +732,41 @@ public class AiEngine {
         return sb.toString();
     }
 
-    private String buildUserPrompt(String userText, List<Artifact> artifacts) {
+    private String buildUserPrompt(String userText, List<Artifact> artifacts,
+                                   int[] perArtifactChars) {
         StringBuilder sb = new StringBuilder();
         sb.append(userText == null ? "" : userText);
         sb.append("\n");
 
         if (artifacts != null && !artifacts.isEmpty()) {
-            sb.append("\n--- New evidence provided in this turn ---\n");
-            int maxArtifacts = Math.min(artifacts.size(), MAX_ARTIFACTS_PER_REQUEST);
-            for (int i = 0; i < maxArtifacts; i++) {
+            StringBuilder artifactSection = new StringBuilder();
+            for (int i = 0; i < artifacts.size(); i++) {
                 Artifact a = artifacts.get(i);
-                if (a == null)
-                    continue;
-                sb.append("[").append(a.getType()).append("]\n");
-                sb.append(truncate(a.getContent(), MAX_ARTIFACT_PROMPT_CHARS)).append("\n\n");
+                if (a == null) continue;
+                int alloc = (i < perArtifactChars.length) ? perArtifactChars[i] : 0;
+                if (alloc <= 0) continue; // omit artifacts with zero allocation
+                artifactSection.append("[").append(a.getType()).append("]\n");
+                artifactSection.append(truncate(a.getContent(), alloc)).append("\n\n");
+            }
+            if (artifactSection.length() > 0) {
+                sb.append("\n--- New evidence provided in this turn ---\n");
+                sb.append(artifactSection);
             }
         }
 
         return sb.toString();
     }
 
-    private List<Artifact> limitArtifacts(List<Artifact> artifacts, int limit) {
-        if (artifacts == null || artifacts.isEmpty() || limit <= 0) {
-            return List.of();
-        }
-        if (artifacts.size() <= limit) {
-            return artifacts;
-        }
-        return artifacts.subList(0, limit);
-    }
+    // -------------------------------------------------------------------------
+    // Conversation summary
+    // -------------------------------------------------------------------------
 
     private void maybeScheduleConversationSummary(String conversationId) {
         if (conversationId == null || conversationId.isBlank()) {
             return;
         }
 
-        List<com.kdiag.server.ai.history.HistoryService.HistoryEntry> snapshot = historyService.snapshotHistory(conversationId);
+        List<HistoryService.HistoryEntry> snapshot = historyService.snapshotHistory(conversationId);
         if (snapshot.size() < SUMMARY_TRIGGER_HISTORY_MESSAGES) {
             return;
         }
@@ -339,7 +794,7 @@ public class AiEngine {
     }
 
     private String generateConversationSummary(String existingSummary,
-            List<com.kdiag.server.ai.history.HistoryService.HistoryEntry> snapshot) {
+            List<HistoryService.HistoryEntry> snapshot) {
         List<Map<String, String>> messages = new java.util.ArrayList<>();
         messages.add(Map.of("role", "system", "content",
                 "You summarize Kubernetes troubleshooting conversations. Return a concise Romanian summary under 1600 characters. Focus on: user goal, key errors/logs, commands tried, assistant advice already given, and unresolved next steps. Do not invent details."));
@@ -373,11 +828,14 @@ public class AiEngine {
         return summary;
     }
 
+    // -------------------------------------------------------------------------
+    // Fallback answer (when Ollama is unavailable)
+    // -------------------------------------------------------------------------
+
     private String fallbackAnswer(String userText, List<Artifact> artifacts, String relevantDocs) {
         String normalized = userText == null ? "" : userText.toLowerCase(Locale.ROOT);
         StringBuilder answer = new StringBuilder();
 
-        // Check if user is asking to avoid commands
         boolean avoidCommands = normalized.contains("no command")
                 || normalized.contains("stop command")
                 || normalized.contains("don't give command")
@@ -424,7 +882,6 @@ public class AiEngine {
             }
             answer.append("\n").append(relevantDocs != null ? relevantDocs : "");
         } else {
-            // Standard fallback with commands
             answer.append("I couldn't reach the LLM, but here's a diagnostic approach:\n\n");
             answer.append("**Step 1: Check Pod Status**\n");
             answer.append("`kubectl get pods -n <ns>` → Look at STATUS and RESTARTS\n\n");
@@ -445,6 +902,10 @@ public class AiEngine {
         return answer.toString().trim();
     }
 
+    // -------------------------------------------------------------------------
+    // Utilities
+    // -------------------------------------------------------------------------
+
     private static String truncate(String s, int max) {
         if (s == null)
             return "";
@@ -462,6 +923,10 @@ public class AiEngine {
             return s;
         return s.substring(0, maxChars);
     }
+
+    // -------------------------------------------------------------------------
+    // Public result types
+    // -------------------------------------------------------------------------
 
     public static class AiResult {
         private final String assistantText;

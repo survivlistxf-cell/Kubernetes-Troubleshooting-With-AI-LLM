@@ -1,0 +1,114 @@
+package com.kdiag.server.maintenance;
+
+import com.kdiag.server.docs.index.LuceneChunkIndex;
+import com.kdiag.server.metrics.MetricsCollector;
+import com.kdiag.server.repositories.KubernetesDocPageRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class DynamicPageCleanupServiceTest {
+
+    @Mock KubernetesDocPageRepository pageRepo;
+    @Mock LuceneChunkIndex            luceneIndex;
+    @Mock MetricsCollector            metrics;
+
+    private DynamicPageCleanupService service;
+
+    @BeforeEach
+    void setUp() {
+        service = new DynamicPageCleanupService(pageRepo, luceneIndex, metrics);
+        ReflectionTestUtils.setField(service, "enabled", true);
+        ReflectionTestUtils.setField(service, "ageDays",  30);
+        ReflectionTestUtils.setField(service, "dryRun",   false);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 1: dry-run — candidates found but nothing deleted
+    // -----------------------------------------------------------------------
+
+    @Test
+    void dryRun_candidatesFoundButNotDeleted() {
+        List<Object[]> fakeCandidates = List.of(
+                new Object[]{1L, "https://kubernetes.io/docs/a"},
+                new Object[]{2L, "https://kubernetes.io/docs/b"},
+                new Object[]{3L, "https://kubernetes.io/docs/c"}
+        );
+        when(pageRepo.findStaleDynamicPages(any())).thenReturn(fakeCandidates);
+
+        DynamicPageCleanupService.CleanupResult result = service.runCleanup(true);
+
+        verify(pageRepo).findStaleDynamicPages(any());
+        verify(pageRepo, never()).deleteByIds(any());
+        verify(luceneIndex, never()).forceGarbageCollect();
+        assertEquals(3, result.candidates());
+        assertEquals(0, result.deleted());
+        assertTrue(result.dryRun());
+        verify(metrics).recordCleanupRun(eq(0), anyLong(), eq(true));
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 2: real run with no candidates — delete and GC never called
+    // -----------------------------------------------------------------------
+
+    @Test
+    void realRun_noCandidates_noDeleteNoGc() {
+        when(pageRepo.findStaleDynamicPages(any())).thenReturn(List.of());
+
+        DynamicPageCleanupService.CleanupResult result = service.runCleanup(false);
+
+        verify(pageRepo, never()).deleteByIds(any());
+        verify(luceneIndex, never()).forceGarbageCollect();
+        verify(metrics).recordCleanupRun(eq(0), anyLong(), eq(false));
+        assertEquals(0, result.candidates());
+        assertEquals(0, result.deleted());
+        assertFalse(result.dryRun());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 3: real run with candidates — deletes rows and runs Lucene GC
+    // -----------------------------------------------------------------------
+
+    @Test
+    void realRun_withCandidates_deletesAndRunsGc() {
+        List<Object[]> fakeCandidates = List.of(
+                new Object[]{10L, "https://kubernetes.io/docs/x"},
+                new Object[]{20L, "https://kubernetes.io/docs/y"}
+        );
+        when(pageRepo.findStaleDynamicPages(any())).thenReturn(fakeCandidates);
+        when(pageRepo.deleteByIds(any())).thenReturn(2);
+        when(luceneIndex.forceGarbageCollect()).thenReturn(50);
+
+        DynamicPageCleanupService.CleanupResult result = service.runCleanup(false);
+
+        verify(pageRepo).deleteByIds(List.of(10L, 20L));
+        verify(luceneIndex).forceGarbageCollect();
+        verify(metrics).recordCleanupRun(eq(2), anyLong(), eq(false));
+        assertEquals(2, result.candidates());
+        assertEquals(2, result.deleted());
+        assertFalse(result.dryRun());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 4: disabled — scheduledCleanup short-circuits, no repo calls
+    // -----------------------------------------------------------------------
+
+    @Test
+    void disabled_scheduledCleanupShortCircuits() {
+        ReflectionTestUtils.setField(service, "enabled", false);
+
+        service.scheduledCleanup();
+
+        verifyNoInteractions(pageRepo, luceneIndex, metrics);
+    }
+}

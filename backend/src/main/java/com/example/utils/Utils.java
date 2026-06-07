@@ -2,10 +2,32 @@ package com.example.utils;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
 public class Utils {
+
+    /** Maximum number of clusters that can be addressed in a single multi-scan request. */
+    public static final int MAX_MULTI_CLUSTERS = 5;
+
+    /**
+     * Parse a comma-separated list of cluster ids into a deduplicated, ordered list.
+     * Returns an empty list for null/blank input. Non-numeric tokens are silently dropped.
+     */
+    public static List<Long> parseClusterIds(String csv) {
+        if (csv == null || csv.isBlank()) return List.of();
+        List<Long> out = new ArrayList<>();
+        for (String part : csv.split(",")) {
+            try {
+                Long v = Long.parseLong(part.trim());
+                if (!out.contains(v)) out.add(v);
+            } catch (NumberFormatException ignored) {}
+        }
+        return out;
+    }
+
 
     // ── ChatController & Generic Utilities ──
 

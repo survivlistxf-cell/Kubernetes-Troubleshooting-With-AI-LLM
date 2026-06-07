@@ -1,5 +1,5 @@
 import { state } from './state.js';
-import { scanNodes, nodeDetails } from './api.js';
+import { scanNodes, nodeDetails, scanNodesMulti } from './api.js';
 import {
   escapeHtml, prettyJson, updateBulkUIComponent, syncCheckboxes, createHelperButton,
   buildSelectionSignature
@@ -11,6 +11,10 @@ import { saveNodesScan, readSavedNodesScan, clearNodesScan } from './session.js'
 
 function getSelectedNodeLevels() {
   return Array.from(document.querySelectorAll('.node-detail-level:checked')).map(cb => cb.value);
+}
+
+function nodeKey(node) {
+  return node._clusterId ? `${node._clusterId}::${node.name}` : node.name;
 }
 
 function setActiveNodeTab(tab) {
@@ -107,8 +111,8 @@ export function initNodesScanner() {
     if (!nodesList) return;
     nodesList.querySelectorAll('.pod-item').forEach(row => {
       const cb = row.querySelector('.node-item-checkbox');
-      const name = cb?.getAttribute('data-node-name');
-      row.classList.toggle('is-selected', !!name && selectedNodes.has(name));
+      const k = cb?.getAttribute('data-node-key');
+      row.classList.toggle('is-selected', !!k && selectedNodes.has(k));
     });
   }
 
@@ -123,11 +127,11 @@ export function initNodesScanner() {
     selectedNodes.clear();
     if (checked) {
       (state.lastScannedNodes || []).forEach(n => {
-        selectedNodes.add(n.name);
+        selectedNodes.add(nodeKey(n));
       });
     }
     // Update all node checkboxes in the list
-    syncCheckboxes(nodesList, '.node-item-checkbox', 'data-node-name', selectedNodes);
+    syncCheckboxes(nodesList, '.node-item-checkbox', 'data-node-key', selectedNodes);
     updateUI();
   });
 
@@ -139,7 +143,7 @@ export function initNodesScanner() {
   selectMasterBtn?.addEventListener('click', () => {
     selectedNodes.clear();
     (state.lastScannedNodes || []).forEach(n => {
-      if (isMaster(n)) selectedNodes.add(n.name);
+      if (isMaster(n)) selectedNodes.add(nodeKey(n));
     });
     syncNodeCheckboxes();
     updateUI();
@@ -148,15 +152,58 @@ export function initNodesScanner() {
   selectWorkerBtn?.addEventListener('click', () => {
     selectedNodes.clear();
     (state.lastScannedNodes || []).forEach(n => {
-      if (!isMaster(n)) selectedNodes.add(n.name);
+      if (!isMaster(n)) selectedNodes.add(nodeKey(n));
     });
     syncNodeCheckboxes();
     updateUI();
   });
 
   function syncNodeCheckboxes() {
-    syncCheckboxes(nodesList, '.node-item-checkbox', 'data-node-name', selectedNodes);
+    syncCheckboxes(nodesList, '.node-item-checkbox', 'data-node-key', selectedNodes);
   }
+
+  // ---- Multi-cluster mode wiring ----
+  const multiToggle = document.getElementById('nodes-multi-toggle');
+  const multiPicker = document.getElementById('nodes-multi-picker');
+  const multiList = document.getElementById('nodes-multi-cluster-list');
+  const nodesClusterSelect = document.getElementById('nodes-cluster-select');
+
+  function getSelectedMultiNodeClusterIds() {
+    return Array.from(document.querySelectorAll('.nodes-multi-cluster-cb:checked')).map(cb => Number(cb.value));
+  }
+
+  function renderNodesMultiPicker() {
+    if (!multiList) return;
+    const sel = new Set(getSelectedMultiNodeClusterIds());
+    multiList.innerHTML = (state.clusters || []).map(c => {
+      const checked = sel.has(Number(c.id)) ? 'checked' : '';
+      const cls = checked ? 'multi-cluster-pill checked' : 'multi-cluster-pill';
+      const label = `${escapeHtml(c.displayName || c.name)}${(c.isDefault || c.default) ? ' ★' : ''}`;
+      return `<label class="${cls}"><input type="checkbox" class="nodes-multi-cluster-cb" value="${c.id}" ${checked}> <span>${label}</span></label>`;
+    }).join('');
+
+    multiList.querySelectorAll('.nodes-multi-cluster-cb').forEach(cb => {
+      cb.addEventListener('change', (ev) => {
+        const checked = Array.from(multiList.querySelectorAll('.nodes-multi-cluster-cb:checked'));
+        if (checked.length > 5) {
+          ev.target.checked = false;
+          alert('Maximum 5 clusters allowed.');
+          return;
+        }
+        cb.closest('.multi-cluster-pill')?.classList.toggle('checked', cb.checked);
+      });
+    });
+  }
+
+  multiToggle?.addEventListener('change', () => {
+    const on = !!multiToggle.checked;
+    if (multiPicker) multiPicker.style.display = on ? '' : 'none';
+    if (nodesClusterSelect) nodesClusterSelect.disabled = on;
+    if (on) renderNodesMultiPicker();
+  });
+  document.addEventListener('clusters:refreshed', () => {
+    if (multiToggle?.checked) renderNodesMultiPicker();
+  });
 
 
   document.getElementById('node-details-close')?.addEventListener('click', closeNodeDetailsModal);
@@ -174,6 +221,13 @@ export function initNodesScanner() {
   scanNodesBtn?.addEventListener('click', async () => {
     const clusterSelect = document.getElementById('nodes-cluster-select');
     const clusterId = getSelectedClusterId(clusterSelect);
+    const isMulti = !!multiToggle?.checked;
+    const multiIds = isMulti ? getSelectedMultiNodeClusterIds() : [];
+
+    if (isMulti && multiIds.length === 0) {
+      alert('Multi-cluster mode is on — select at least one cluster.');
+      return;
+    }
 
     scanNodesBtn.disabled = true;
     scanNodesBtn.style.opacity = '0.6';
@@ -181,11 +235,36 @@ export function initNodesScanner() {
     nodesScanResults.style.display = 'none';
     nodesList.innerHTML = '';
     state.lastScannedNodes = [];
-    state.activeClusterId = clusterId;
+    state.activeClusterId = isMulti ? null : clusterId;
     selectedNodes.clear();
     if (bulkOptions) bulkOptions.style.display = 'none';
     if (selectAllCheckbox) selectAllCheckbox.checked = false;
     updateUI();
+
+    if (isMulti) {
+      const { resp, data } = await scanNodesMulti(multiIds);
+      nodesScanLoading.style.display = 'none';
+      nodesScanResults.style.display = 'block';
+      if (!resp.ok) {
+        nodesList.innerHTML = `<p style="text-align:center;color:#d32f2f;">Error: ${escapeHtml(data?.error || 'Multi-scan failed')}</p>`;
+        scanNodesBtn.disabled = false;
+        scanNodesBtn.style.opacity = '1';
+        clearNodesScan();
+        return;
+      }
+      const flat = [];
+      for (const r of (data?.results || [])) {
+        if (!r.success || !Array.isArray(r.nodes)) continue;
+        const cName = r.clusterDisplayName || r.clusterName || `cluster-${r.clusterId}`;
+        for (const n of r.nodes) flat.push({ ...n, _clusterId: r.clusterId, _clusterName: cName });
+      }
+      state.lastScannedNodes = flat;
+      renderNodesList(flat);
+      saveNodesScan({ nodes: flat, clusterId: null, ts: Date.now() });
+      scanNodesBtn.disabled = false;
+      scanNodesBtn.style.opacity = '1';
+      return;
+    }
 
     const { resp, data } = await scanNodes(clusterId);
 
@@ -210,6 +289,42 @@ export function initNodesScanner() {
     scanNodesBtn.style.opacity = '1';
   });
 
+  function createNodeItemEl(n, key) {
+    const div = document.createElement('div');
+    div.className = 'pod-item';
+    div.style.display = 'flex';
+    div.style.alignItems = 'flex-start';
+    div.style.gap = '1rem';
+
+    div.innerHTML = `
+      <input type="checkbox" class="node-item-checkbox" data-node-key="${escapeHtml(key)}" data-node-name="${escapeHtml(n.name)}"
+             style="width: 18px; height: 18px; margin-top: 0.5rem; accent-color: var(--yellow-green); flex-shrink: 0;"
+             ${selectedNodes.has(key) ? 'checked' : ''}>
+      <div style="flex: 1;">
+        <h4>🖥️ ${escapeHtml(n.name)}</h4>
+        <div class="pod-info">
+          <div class="pod-info-item"><span class="pod-info-label">Status:</span><span>${escapeHtml(n.status || 'N/A')}</span></div>
+          <div class="pod-info-item"><span class="pod-info-label">Roles:</span><span>${escapeHtml(n.roles || 'N/A')}</span></div>
+          <div class="pod-info-item"><span class="pod-info-label">Version:</span><span>${escapeHtml(n.version || 'N/A')}</span></div>
+        </div>
+        <button class="btn-details" type="button" data-node-name="${escapeHtml(n.name)}" data-node-cluster="${n._clusterId || ''}">🔎 Details</button>
+      </div>
+    `;
+
+    const cb = div.querySelector('.node-item-checkbox');
+    cb.addEventListener('change', (e) => {
+      if (e.target.checked) selectedNodes.add(key);
+      else selectedNodes.delete(key);
+      updateUI();
+    });
+    div.addEventListener('click', (ev) => {
+      if (ev.target.closest('button') || ev.target.closest('.node-item-checkbox')) return;
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    return div;
+  }
+
   function renderNodesList(nodes) {
     nodesList.innerHTML = '';
     if (bulkOptions && nodes.length > 0) bulkOptions.style.display = 'block';
@@ -219,47 +334,57 @@ export function initNodesScanner() {
       return;
     }
 
-    nodes.forEach(n => {
-      const div = document.createElement('div');
-      div.className = 'pod-item';
-      div.style.display = 'flex';
-      div.style.alignItems = 'flex-start';
-      div.style.gap = '1rem';
+    const isMulti = nodes.some(n => n._clusterId != null);
 
-      div.innerHTML = `
-        <input type="checkbox" class="node-item-checkbox" data-node-name="${escapeHtml(n.name)}"
-               style="width: 18px; height: 18px; margin-top: 0.5rem; accent-color: var(--yellow-green); flex-shrink: 0;"
-               ${selectedNodes.has(n.name) ? 'checked' : ''}>
-        <div style="flex: 1;">
-          <h4>🖥️ ${escapeHtml(n.name)}</h4>
-          <div class="pod-info">
-            <div class="pod-info-item"><span class="pod-info-label">Status:</span><span>${escapeHtml(n.status || 'N/A')}</span></div>
-            <div class="pod-info-item"><span class="pod-info-label">Roles:</span><span>${escapeHtml(n.roles || 'N/A')}</span></div>
-            <div class="pod-info-item"><span class="pod-info-label">Version:</span><span>${escapeHtml(n.version || 'N/A')}</span></div>
-          </div>
-          <button class="btn-details" type="button" data-node-name="${escapeHtml(n.name)}">🔎 Details</button>
-        </div>
-      `;
-      nodesList.appendChild(div);
+    if (isMulti) {
+      // Group by cluster, maintain insertion order
+      const clusterMap = new Map();
+      for (const n of nodes) {
+        const cid = String(n._clusterId);
+        if (!clusterMap.has(cid)) {
+          clusterMap.set(cid, { name: n._clusterName || `cluster-${cid}`, nodes: [] });
+        }
+        clusterMap.get(cid).nodes.push(n);
+      }
 
-      const cb = div.querySelector('.node-item-checkbox');
-      cb.addEventListener('change', (e) => {
-        if (e.target.checked) selectedNodes.add(n.name);
-        else selectedNodes.delete(n.name);
-        updateUI();
+      const grid = document.createElement('div');
+      grid.className = 'multi-cluster-grid';
+      grid.style.setProperty('--mc-cols', String(clusterMap.size));
+
+      for (const [, { name, nodes: clusterNodes }] of clusterMap) {
+        const col = document.createElement('div');
+        col.className = 'multi-cluster-col';
+
+        const header = document.createElement('div');
+        header.className = 'multi-cluster-col-header';
+        header.textContent = `☁️ ${name} (${clusterNodes.length})`;
+        col.appendChild(header);
+
+        for (const n of clusterNodes) {
+          const key = nodeKey(n);
+          col.appendChild(createNodeItemEl(n, key));
+        }
+        grid.appendChild(col);
+      }
+      nodesList.appendChild(grid);
+    } else {
+      nodes.forEach(n => {
+        const key = nodeKey(n);
+        nodesList.appendChild(createNodeItemEl(n, key));
       });
-
-      div.addEventListener('click', (ev) => {
-        if (ev.target.closest('button') || ev.target.closest('.node-item-checkbox')) return;
-        cb.checked = !cb.checked;
-        cb.dispatchEvent(new Event('change', { bubbles: true }));
-      });
-    });
+    }
 
     nodesList.querySelectorAll('button.btn-details').forEach(btn => {
       btn.addEventListener('click', async (ev) => {
         const name = ev.currentTarget?.dataset?.nodeName;
-        const node = (state.lastScannedNodes || []).find(x => String(x.name) === String(name)) || { name };
+        const cidRaw = ev.currentTarget?.dataset?.nodeCluster;
+        const nodeClusterId = cidRaw ? Number(cidRaw) : null;
+        const node = (state.lastScannedNodes || []).find(x =>
+          String(x.name) === String(name) &&
+          (nodeClusterId ? Number(x._clusterId) === nodeClusterId : true)
+        ) || { name };
+
+        if (node._clusterId) state.activeClusterId = node._clusterId;
 
         state.selectedNodeForDetails = { ...node };
         state.selectedNodeDetailsPayload = {};
@@ -321,18 +446,20 @@ export function initNodesScanner() {
     bulkAddBtn.disabled = true;
     bulkAddBtn.textContent = '⌛ Fetching details...';
 
-    const selectedNodeList = state.lastScannedNodes.filter(n => selectedNodes.has(n.name));
+    const selectedNodeList = state.lastScannedNodes.filter(n => selectedNodes.has(nodeKey(n)));
     let aggregatedContext = `=== BULK NODE CONTEXT (${selectedNodeList.length} nodes) ===\n`;
     aggregatedContext += `Detail levels: ${levels.join(', ') || 'Summary only'}\n\n`;
 
     try {
       for (const node of selectedNodeList) {
-        aggregatedContext += `--- NODE: ${node.name} ---\n`;
+        const clusterTag = node._clusterName ? ` @ cluster:${node._clusterName}` : '';
+        aggregatedContext += `--- NODE: ${node.name}${clusterTag} ---\n`;
         aggregatedContext += `Status: ${node.status} | Roles: ${node.roles || 'N/A'} | Version: ${node.version}\n`;
 
+        const nodeClusterId = node._clusterId || state.activeClusterId;
         if (levels.length > 0) {
           const detailsResults = await Promise.all(levels.map(async lvl => {
-            const { resp, data } = await nodeDetails(node.name, lvl, state.activeClusterId);
+            const { resp, data } = await nodeDetails(node.name, lvl, nodeClusterId);
             return { lvl, ok: resp.ok, data };
           }));
 
@@ -373,7 +500,8 @@ export function initNodesScanner() {
 
 async function loadNodeTabDetails(tab) {
   if (!state.selectedNodeForDetails) return;
-  const name = state.selectedNodeForDetails.name;
+  const node = state.selectedNodeForDetails;
+  const name = node.name;
 
   const mapping = {
     'describe': 'describe',
@@ -392,7 +520,8 @@ async function loadNodeTabDetails(tab) {
   const el = document.getElementById(`node-details-${tab === 'json' ? 'json' : tab}`);
   if (el) el.textContent = 'Loading...';
 
-  const { resp, data } = await nodeDetails(name, tab, state.activeClusterId);
+  const nodeClusterId = node._clusterId || state.activeClusterId;
+  const { resp, data } = await nodeDetails(name, tab, nodeClusterId);
   if (resp.ok) {
     if (!state.selectedNodeDetailsPayload) state.selectedNodeDetailsPayload = {};
     state.selectedNodeDetailsPayload[payloadKey] = data[payloadKey];

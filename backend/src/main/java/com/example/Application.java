@@ -2,6 +2,7 @@ package com.example;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -11,9 +12,14 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.context.annotation.Bean;
+import org.springframework.web.reactive.function.client.WebClient;
 import java.util.Arrays;
 
-@SpringBootApplication
+// Exclude UserDetailsServiceAutoConfiguration so Spring Security does NOT auto-generate
+// a default user/password on every boot. Our SecurityFilterChain (see SecurityConfig)
+// already permits all requests, and authentication is handled by our own AuthController
+// + JWT setup — no Spring-managed user store is needed.
+@SpringBootApplication(exclude = { UserDetailsServiceAutoConfiguration.class })
 @EnableScheduling
 @ComponentScan(basePackages = {"com.example", "com.example.controllers", "com.example.services"})
 public class Application {
@@ -23,7 +29,12 @@ public class Application {
     }
 
     @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
+    public static WebClient.Builder webClientBuilder() {
+        return WebClient.builder();
+    }
+
+    @Bean
+    public static CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(Arrays.asList("*"));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));

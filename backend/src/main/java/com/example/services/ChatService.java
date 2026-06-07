@@ -219,7 +219,7 @@ public class ChatService {
                 used++;
             }
 
-            String prompt = "Generate a short Romanian title (max 8 words) that summarizes this conversation. " +
+            String prompt = "Generate a short title (max 8 words) that summarizes this conversation. " +
                     "Return ONLY the title, no quotes, no punctuation at the end.\n\n" + sb.toString().trim();
 
             AiForwardingService.ForwardResult forwardResult = aiForwardingService.forward(userId, conversationId, prompt, null, requestId);

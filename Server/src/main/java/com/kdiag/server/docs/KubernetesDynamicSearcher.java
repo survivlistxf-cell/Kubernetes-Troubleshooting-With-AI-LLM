@@ -1,5 +1,6 @@
 package com.kdiag.server.docs;
 
+import com.kdiag.server.docs.index.LuceneChunkIndex;
 import com.kdiag.server.entities.KubernetesDocPage;
 import com.kdiag.server.entities.ProblemResolution;
 import com.kdiag.server.repositories.KubernetesDocPageRepository;
@@ -15,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -28,18 +28,23 @@ public class KubernetesDynamicSearcher {
     private static final int DDG_TIMEOUT_MS = 10000;
     private static final int MAX_SEARCH_RESULTS = 2;
     private static final int MAX_DYNAMIC_DOC_CHARS = 10000;
-    private static final int MAX_SCRAPED_DOC_CHARS = 20000;
-    
+    // Hard cap against pathological pages returned by Readability (e.g. mirror sites with huge content)
+    static final int ABSOLUTE_PERSIST_CHAR_CAP = 500_000;
+
     private final KubernetesDocPageRepository docRepository;
     private final ProblemResolutionRepository resolutionRepository;
+    private final LuceneChunkIndex luceneChunkIndex;
 
-    public KubernetesDynamicSearcher(KubernetesDocPageRepository docRepository, ProblemResolutionRepository resolutionRepository) {
+    public KubernetesDynamicSearcher(KubernetesDocPageRepository docRepository,
+                                     ProblemResolutionRepository resolutionRepository,
+                                     LuceneChunkIndex luceneChunkIndex) {
         this.docRepository = docRepository;
         this.resolutionRepository = resolutionRepository;
+        this.luceneChunkIndex = luceneChunkIndex;
     }
 
     /**
-     * Conducts a DuckDuckGo HTML search bounded to kubernetes.io, 
+     * Conducts a DuckDuckGo HTML search bounded to kubernetes.io,
      * scrapes the top URLs and saves them to knowledge base.
      */
     public String searchAndSave(String conversationId, String query) {
@@ -51,7 +56,7 @@ public class KubernetesDynamicSearcher {
             // Use DDG HTML version to bypass JS requirements
             String searchUrl = "https://html.duckduckgo.com/html/?q=site:kubernetes.io/docs+" + URLEncoder.encode(query, StandardCharsets.UTF_8);
             logger.info("Asking DDG: {}", searchUrl);
-            
+
             Document searchDoc = Jsoup.connect(searchUrl)
                     .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                     .timeout(DDG_TIMEOUT_MS)
@@ -63,16 +68,16 @@ public class KubernetesDynamicSearcher {
             for (Element a : resultAnchors) {
                 if (count >= MAX_SEARCH_RESULTS) break; // Fetch a small bounded set to avoid LLM context overflow
                 String displayUrl = a.text().trim();
-                
+
                 // Format URL
                 if (!displayUrl.startsWith("http")) {
                     displayUrl = "https://" + displayUrl;
                 }
-                
+
                 if (displayUrl.contains("kubernetes.io/docs/")) {
                     logger.info("Discovered URL: {}", displayUrl);
                     foundUrls.add(displayUrl);
-                    
+
                     String text = fetchAndSaveDoc(displayUrl);
                     if (!text.isEmpty()) {
                         // Deduplicate repetitive paragraphs and limit per dynamic doc to keep prompt size stable
@@ -112,32 +117,24 @@ public class KubernetesDynamicSearcher {
         }
 
         try {
-                Document doc = Jsoup.connect(url)
+            Document doc = Jsoup.connect(url)
                     .userAgent("Mozilla/5.0 (compatible; Kubexplain/1.0)")
                     .timeout(DDG_TIMEOUT_MS)
                     .get();
-            Element main = doc.selectFirst("main, article, .td-content, #content");
-            if (main == null) main = doc.body();
 
-            StringBuilder sb = new StringBuilder();
-            for (Element el : main.select("h1, h2, h3, p, pre, code, li")) {
-                String text = el.text().trim();
-                if (!text.isEmpty()) {
-                    if (el.tagName().equals("pre") || el.tagName().equals("code")) {
-                        sb.append("`").append(text).append("`\n");
-                    } else if (el.tagName().matches("h[123]")) {
-                        sb.append("\n").append(text).append("\n"); 
-                    } else {
-                        sb.append(text).append("\n");
-                    }
-                }
-            }
-            String content = sb.toString().trim();
-            String title = doc.title();
+            ReadabilityExtractor.Result result = ReadabilityExtractor.extract(url, doc, this::legacyExtract);
+            String content = result.text();
+            String title = result.title();
             if (title == null || title.isBlank()) title = "Discovered Kubernetes Doc";
 
-            KubernetesDocPage page = new KubernetesDocPage(url, title, truncate(content, MAX_SCRAPED_DOC_CHARS), true);
+            if (content.length() > ABSOLUTE_PERSIST_CHAR_CAP) {
+                logger.warn("Dynamic page {} is {} chars — capping at {}", url, content.length(), ABSOLUTE_PERSIST_CHAR_CAP);
+                content = content.substring(0, ABSOLUTE_PERSIST_CHAR_CAP);
+            }
+
+            KubernetesDocPage page = new KubernetesDocPage(url, title, content, true);
             docRepository.save(page);
+            luceneChunkIndex.indexPage(page);
 
             // For dynamic inclusion, deduplicate and cap the snippet to avoid sending huge prompts
             String deduped = dedupeParagraphs(content, MAX_DYNAMIC_DOC_CHARS);
@@ -146,6 +143,25 @@ public class KubernetesDynamicSearcher {
             logger.error("Failed to fetch {}", url, e);
             return "";
         }
+    }
+
+    private String legacyExtract(Document doc) {
+        Element main = doc.selectFirst("main, article, .td-content, #content");
+        if (main == null) main = doc.body();
+        StringBuilder sb = new StringBuilder();
+        for (Element el : main.select("h1, h2, h3, p, pre, code, li")) {
+            String text = el.text().trim();
+            if (!text.isEmpty()) {
+                if (el.tagName().equals("pre") || el.tagName().equals("code")) {
+                    sb.append("`").append(text).append("`\n");
+                } else if (el.tagName().matches("h[123]")) {
+                    sb.append("\n").append(text).append("\n");
+                } else {
+                    sb.append(text).append("\n");
+                }
+            }
+        }
+        return sb.toString().trim();
     }
 
     /**

@@ -75,6 +75,8 @@ export async function getClusters() {
   return fetchJson(`${API_URL}/clusters`);
 }
 
+// folosim multipart/form-data pentru a trimite fisier prin json (care e un fisier de date binare)
+// in timp ce json trimite date prin text
 export async function addCluster(formData) {
   const resp = await fetch(`${API_URL}/clusters`, {
     method: 'POST',
@@ -102,4 +104,48 @@ export async function testCluster(id) {
 
 export async function getClusterNamespaces(id) {
   return fetchJson(`${API_URL}/clusters/${encodeURIComponent(id)}/namespaces`);
+}
+
+// ---- Topology API ----
+
+export async function getTopology(refresh = false) {
+  const params = new URLSearchParams();
+  if (refresh) params.set('refresh', 'true');
+  const qs = params.toString();
+  return fetchJson(`${API_URL}/clusters/topology${qs ? '?' + qs : ''}`);
+}
+
+export async function getClusterLinks() {
+  return fetchJson(`${API_URL}/cluster-links`);
+}
+
+export async function testClusterLink(id) {
+  return fetchJson(`${API_URL}/cluster-links/${encodeURIComponent(id)}/test`, { method: 'POST' });
+}
+
+export async function discoverClusterLinks(force = false) {
+  const qs = force ? '?force=true' : '';
+  return fetchJson(`${API_URL}/clusters/discover-links${qs}`, { method: 'POST' });
+}
+
+// ---- Multi-cluster scan API ----
+
+export async function scanPodsMulti(clusterIds, namespaceOrMap) {
+  const params = new URLSearchParams();
+  params.set('clusterIds', (clusterIds || []).join(','));
+  if (namespaceOrMap && typeof namespaceOrMap === 'object') {
+    const namespaceMap = namespaceOrMap instanceof Map
+      ? Object.fromEntries(namespaceOrMap.entries())
+      : namespaceOrMap;
+    params.set('namespaceMap', JSON.stringify(namespaceMap));
+  } else {
+    params.set('namespace', namespaceOrMap || 'default');
+  }
+  return fetchJson(`${API_URL}/scan-pods/multi?${params.toString()}`);
+}
+
+export async function scanNodesMulti(clusterIds) {
+  const params = new URLSearchParams();
+  params.set('clusterIds', (clusterIds || []).join(','));
+  return fetchJson(`${API_URL}/scan-nodes/multi?${params.toString()}`);
 }

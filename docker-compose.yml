@@ -2,8 +2,11 @@ version: '3.8'
 
 services:
   # PostgreSQL Database
+  # NOTE: uses pgvector/pgvector:pg16 instead of plain postgres:16-alpine so the
+  # `vector` extension is available out of the box (required by the qa_feedback
+  # table — Hibernate fails to create it otherwise with `type "vector" does not exist`).
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: proiect-postgres
     environment:
       POSTGRES_USER: postgres

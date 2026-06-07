@@ -50,10 +50,10 @@ public final class KdiagModels {
         }
 
                 private static final int MAX_CONVERSATION_ID_CHARS = 100;
-                private static final int MAX_MESSAGE_TEXT_CHARS = 4000;
+                private static final int MAX_MESSAGE_TEXT_CHARS = 16000;
                 private static final int MAX_ARTIFACTS_PER_REQUEST = 5;
                 private static final int MAX_ARTIFACT_TARGET_CHARS = 255;
-                private static final int MAX_ARTIFACT_CONTENT_CHARS = 10000;
+                private static final int MAX_ARTIFACT_CONTENT_CHARS = 20000;
         @JsonProperty("protocol_version")
         public void setProtocol_version(String protocol_version) {
             this.protocol_version = protocol_version;
@@ -156,7 +156,7 @@ public final class KdiagModels {
         private String role;
 
         @NotBlank
-        @Size(max = 4000)
+        @Size(max = 16000)
         private String text;
 
         public String getRole() {
@@ -281,7 +281,7 @@ public final class KdiagModels {
         /**
          * Raw content (logs/describe/events). Keep it as string for MVP.
          */
-        @Size(max = 10000)
+        @Size(max = 20000)
         private String content;
 
         /**

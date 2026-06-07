@@ -1,17 +1,43 @@
 package com.example.services;
 
 import com.example.entities.ClusterConfig;
+import com.example.repositories.ClusterConfigRepository;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
 @Service
 public class KubectlService {
+
+    private final ClusterConfigRepository clusterRepo;
+
+    public KubectlService(ClusterConfigRepository clusterRepo) {
+        this.clusterRepo = clusterRepo;
+    }
+
+    /**
+     * Build the kubectl prefix args for a cluster id, falling back to a generic
+     * {@code kubectl --kubeconfig <path>} when the id is null or unknown.
+     *
+     * <p>This single helper replaces the duplicated private {@code kubectlBase}
+     * methods that previously lived in {@link com.example.controllers.PodsController}
+     * and {@link com.example.controllers.NodesController}.
+     */
+    public List<String> kubectlBase(Long clusterId) {
+        if (clusterId != null) {
+            Optional<ClusterConfig> opt = clusterRepo.findById(clusterId);
+            if (opt.isPresent()) {
+                return buildKubectlPrefix(opt.get());
+            }
+        }
+        return new ArrayList<>(Arrays.asList("kubectl", "--kubeconfig", resolveKubeconfigPath()));
+    }
 
     public boolean isKubectlInstalledQuick() {
         try {
@@ -46,16 +72,6 @@ public class KubectlService {
             prefix.add(cluster.getContextName());
         }
         return prefix;
-    }
-
-    /**
-     * Resolve the kubeconfig path for a given ClusterConfig, or fall back to the default.
-     */
-    public String resolveKubeconfigForCluster(ClusterConfig cluster) {
-        if (cluster != null && cluster.getKubeconfigPath() != null && !cluster.getKubeconfigPath().isBlank()) {
-            return cluster.getKubeconfigPath();
-        }
-        return resolveKubeconfigPath();
     }
 
     public String executeCommandWithTimeout(List<String> commandArgs, int timeoutSeconds) {
@@ -167,10 +183,6 @@ public class KubectlService {
 
         public static ExecResult timedOut() {
             return new ExecResult(null, null, true, "timeout");
-        }
-
-        public static ExecResult skipped() {
-            return new ExecResult(null, "", false, null);
         }
 
         public static ExecResult failed(String message) {

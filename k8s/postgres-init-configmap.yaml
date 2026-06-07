@@ -6,6 +6,11 @@ data:
   init.sql: |
     -- Initialize PostgreSQL database with schema for Kubexplain
 
+    -- Required extensions
+    -- pgvector is needed by the qa_feedback.embedding column (vector(768)).
+    -- Must run BEFORE Hibernate's automatic schema update.
+    CREATE EXTENSION IF NOT EXISTS vector;
+
     -- Users table
     CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,

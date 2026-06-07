@@ -8,10 +8,13 @@ import com.example.services.AiForwardingService;
 import com.example.services.ChatService;
 import com.example.utils.Utils;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
 
 import java.util.*;
 
@@ -105,6 +108,79 @@ public class ChatController {
         response.put("attachments", attachmentsMeta);
 
         return ResponseEntity.ok(response);
+    }
+
+    // ── Streaming SSE endpoint ──
+
+    /**
+     * SSE proxy: forwards the request to the AI server's streaming endpoint and
+     * relays events to the browser.  Persists the full accumulated response to DB
+     * once the stream completes (or is cancelled).
+     *
+     * <p>Event types forwarded verbatim: {@code meta}, {@code chunk}, {@code done}, {@code error}.
+     */
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<String>> stream(@RequestBody Map<String, Object> request) {
+        String requestId = UUID.randomUUID().toString();
+        String userId = Utils.asString(request.get("userId"));
+        String userMessage = Utils.extractUserMessage(request);
+        String conversationId = Utils.asString(request.get("conversationId"));
+        Object attachmentsObj = request.get("attachments");
+
+        if (userMessage == null || userMessage.isBlank()) {
+            return Flux.just(ServerSentEvent.<String>builder()
+                    .event("error").data("Message cannot be empty").build());
+        }
+
+        if (conversationId == null || conversationId.isBlank()) {
+            conversationId = UUID.randomUUID().toString();
+        }
+        final String finalConvId = conversationId;
+        final String finalUserId = userId;
+        final String finalUserMessage = userMessage;
+        final Object finalAttachmentsObj = attachmentsObj;
+
+        StringBuilder responseBuffer = new StringBuilder();
+        final ObjectMapper chunkMapper = new ObjectMapper();
+
+        return aiService.forwardStream(finalUserMessage, finalAttachmentsObj, finalConvId, requestId)
+                // Intercept chunk events to accumulate the full response for persistence.
+                // Chunks are JSON-wrapped ({"text":"..."}) by the AI server so that
+                // leading/trailing whitespace inside Ollama tokens (" of", " the", …)
+                // survives the SSE transport — the W3C spec strips a single leading
+                // space from raw data: payloads, which would otherwise concatenate
+                // streamed tokens into a single space-less blob.
+                .doOnNext(sse -> {
+                    if ("chunk".equals(sse.event())) {
+                        String data = sse.data();
+                        if (data == null) return;
+                        try {
+                            String text = chunkMapper.readTree(data).path("text").asText("");
+                            responseBuffer.append(text);
+                        } catch (Exception parseErr) {
+                            // Fallback: tolerate legacy/raw payloads so persistence is not lost
+                            responseBuffer.append(data);
+                        }
+                    }
+                    // Capture the server-assigned conversationId from the meta event
+                    // (the AI server may confirm or reassign it)
+                })
+                // After stream ends (complete / cancel / error), persist to DB
+                .doFinally(signal -> {
+                    String aiResponse = responseBuffer.toString().trim();
+                    if (aiResponse.isBlank()) return;
+                    try {
+                        Map<String, Object> persistResult = chatService.persistChat(
+                                finalUserId, finalConvId, finalUserMessage, aiResponse, finalAttachmentsObj);
+                        String conv = persistResult != null
+                                ? String.valueOf(persistResult.getOrDefault("conversationId", finalConvId))
+                                : finalConvId;
+                        chatService.autoGenerateTitleIfNeeded(conv, finalUserId, UUID.randomUUID().toString());
+                        logger.info("[{}] Streamed chat persisted for conv={}", requestId, conv);
+                    } catch (Exception e) {
+                        logger.error("[{}] Failed to persist streamed chat", requestId, e);
+                    }
+                });
     }
 
     @GetMapping("/ai-health")

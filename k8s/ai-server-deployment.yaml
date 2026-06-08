@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-server
+  template:
+    metadata:
+      labels:
+        app: ai-server
+    spec:
+      # Fara toleration => NU ajunge pe nodul Ollama (care e tainted).
+      # Ruleaza pe worker-ele normale.
+      containers:
+        - name: ai-server
+          # Construit din ./Server (modulul com.kdiag.server, artifact ai-server-0.1.0).
+          # Vezi README pentru build & push.
+          image: axiiiiiiii/proiect_licenta-ai-server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8090
+              name: http
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          env:
+            # heap mai mic decat limita de 2Gi (lasa loc pt metaspace + off-heap)
+            - name: JAVA_OPTS
+              value: "-Xmx1536m -Xms512m"
+            # --- Ollama (pe VM-ul dedicat, via service ClusterIP) ---
+            - name: OLLAMA_BASE_URL
+              value: http://ollama:11434
+            - name: OLLAMA_MODEL
+              value: llama3.1
+            - name: OLLAMA_EMBEDDING_MODEL
+              value: nomic-embed-text
+            # --- Retrieval pe ElasticSearch ---
+            - name: KDIAG_RETRIEVAL_ENGINE
+              value: elastic
+            - name: KDIAG_ELASTIC_URI
+              value: http://elasticsearch:9200
+            # --- PostgreSQL (acelasi DB ca backend-ul) ---
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://postgres:5432/kubexplain_db
+            - name: SPRING_DATASOURCE_USERNAME
+              value: postgres
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: postgres
+            - name: SPRING_JPA_HIBERNATE_DDL_AUTO
+              value: update
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8090
+            initialDelaySeconds: 45
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8090
+            initialDelaySeconds: 120
+            periodSeconds: 20
+            timeoutSeconds: 5

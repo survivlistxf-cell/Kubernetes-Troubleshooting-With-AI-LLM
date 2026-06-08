@@ -17,3 +17,9 @@ resources:
   - backend-deployment.yaml
   - frontend-service.yaml
   - frontend-deployment.yaml
+  - ai-server-service.yaml
+  - ai-server-deployment.yaml
+  - ollama-service.yaml
+  - ollama-deployment.yaml
+  - elasticsearch-service.yaml
+  - elasticsearch-deployment.yaml

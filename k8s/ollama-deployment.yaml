@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+spec:
+  replicas: 1
+  # Recreate: nu pornim un al doilea pod care ar concura pe RAM-ul nodului
+  # dedicat in timpul unui rollout.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      # --- Pin DOAR pe VM-ul dedicat Ollama ---
+      # Nodul nou trebuie etichetat:   kubectl label node <nume-nod> workload=ollama
+      # si "murdarit" (taint) ca sa NU primeasca alte pod-uri:
+      #   kubectl taint node <nume-nod> dedicated=ollama:NoSchedule
+      nodeSelector:
+        workload: ollama
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "ollama"
+          effect: "NoSchedule"
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 11434
+              name: http
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            # tine modelele incarcate in RAM intre request-uri (evita reload lent)
+            - name: OLLAMA_KEEP_ALIVE
+              value: "24h"
+            # LLM + embedding incarcate simultan
+            - name: OLLAMA_MAX_LOADED_MODELS
+              value: "2"
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+            limits:
+              # lasam ~2GB nodului pentru OS pe un VM de 16GB
+              cpu: "8"
+              memory: 14Gi
+          volumeMounts:
+            - name: ollama-models
+              mountPath: /root/.ollama
+          # Dupa pornirea serverului, descarca modelele folosite de aplicatie.
+          # Ruleaza o singura data efectiv — daca exista deja pe disc, pull e instant.
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull llama3.1; ollama pull nomic-embed-text"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+      volumes:
+        # Pod-ul e fixat pe un singur nod, deci hostPath pastreaza modelele
+        # (~5-6GB) intre restart-uri, fara re-download. Alternativ: un PVC Cinder.
+        - name: ollama-models
+          hostPath:
+            path: /var/lib/ollama
+            type: DirectoryOrCreate

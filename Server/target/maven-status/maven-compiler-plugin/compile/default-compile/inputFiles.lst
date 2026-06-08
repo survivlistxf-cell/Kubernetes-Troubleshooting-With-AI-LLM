@@ -9,8 +9,11 @@ C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\api
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\api\HealthController.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\api\IndexController.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\api\MetricsController.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\config\RetrievalEngineConfig.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\docs\index\ChunkRetriever.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\docs\index\ChunkSplitter.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\docs\index\DocChunk.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\docs\index\ElasticChunkRetriever.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\docs\index\LuceneChunkIndex.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\docs\KubernetesDocsScraper.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\docs\KubernetesDynamicSearcher.java

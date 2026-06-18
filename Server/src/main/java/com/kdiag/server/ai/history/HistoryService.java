@@ -32,58 +32,72 @@ public class HistoryService {
     // Artifact bank
     // -------------------------------------------------------------------------
 
-    private static final int BANK_MAX_ENTRIES        = 5;
-    private static final int BANK_SUMMARY_CHARS_EACH = 1500;
+    // One bank entry per TURN (not per artifact), holding the FULL normalized content of every
+    // artifact attached in that turn. Older turns beyond BANK_MAX_TURNS are evicted, but their
+    // labels (filenames) are kept as breadcrumbs so the LLM still knows what existed and can ask
+    // the user to re-attach. The actual char budget for rendering is applied later, in AiEngine.
+    private static final int BANK_MAX_TURNS     = 15;
+    private static final int EVICTED_LABELS_MAX = 40;
 
-    private final Map<String, Deque<BankedArtifact>> artifactBank = new ConcurrentHashMap<>();
-    private final Map<String, Long> turnCounters = new ConcurrentHashMap<>();
+    private final Map<String, Deque<BankedTurn>> artifactBank      = new ConcurrentHashMap<>();
+    private final Map<String, Deque<String>>     evictedTurnLabels = new ConcurrentHashMap<>();
+    private final Map<String, Long>              turnCounters      = new ConcurrentHashMap<>();
 
-    public record BankedArtifact(String type, String filename, String summary,
-                                  long turnNumber, Instant addedAt) {}
+    /** A whole turn's worth of attached artifacts, with full normalized content. */
+    public record BankedTurn(long turnNumber, String label, String content, Instant addedAt) {}
+
+    private static String artifactName(Artifact a) {
+        String target = a.getTarget();
+        return (target != null && !target.isBlank()) ? a.getType() + "@" + target : a.getType();
+    }
 
     /**
-     * Banks artifacts for a conversation. Assigns a monotonically increasing turn number,
-     * truncates each summary to BANK_SUMMARY_CHARS_EACH, and evicts oldest entries when
-     * the bank exceeds BANK_MAX_ENTRIES. Returns the turn number assigned to these artifacts.
+     * Banks one entry for the current turn, concatenating the full content of every artifact in
+     * the turn (each prefixed with its [name]). Assigns a monotonically increasing turn number,
+     * evicts oldest turns beyond BANK_MAX_TURNS (keeping their labels as breadcrumbs), and returns
+     * the assigned turn number. Content is stored in full — truncation/summarization happens at
+     * render time against the dynamic bank budget.
      */
     public long addArtifacts(String conversationId, List<Artifact> artifacts) {
         long turn = turnCounters.merge(conversationId, 1L, Long::sum);
 
-        Deque<BankedArtifact> deque = artifactBank.computeIfAbsent(
-                conversationId, k -> new ArrayDeque<>());
-
-        synchronized (deque) {
+        StringBuilder labels  = new StringBuilder();
+        StringBuilder content = new StringBuilder();
+        if (artifacts != null) {
             for (Artifact a : artifacts) {
                 if (a == null || a.getContent() == null || a.getContent().isBlank()) continue;
+                String name = artifactName(a);
+                if (labels.length() > 0) labels.append(", ");
+                labels.append(name);
+                content.append("[").append(name).append("]\n")
+                       .append(a.getContent()).append("\n\n");
+            }
+        }
+        if (content.length() == 0) return turn; // nothing bankable this turn
 
-                String content = a.getContent();
-                String summary;
-                if (content.length() <= BANK_SUMMARY_CHARS_EACH) {
-                    summary = content;
-                } else {
-                    summary = content.substring(0, BANK_SUMMARY_CHARS_EACH)
-                            + "...[truncated, full version was in turn " + turn + "]";
-                    //Suffix-ul "...[truncated, full version was in turn N]" — 
-                    // îi spune LLM-ului că summary-ul e parțial și unde e originalul. 
-                    // E un cue util pentru raționament: dacă întrebarea curentă cere 
-                    // detalii care nu sunt în summary, LLM-ul poate să întrebe userul 
-                    // „poți să reatașezi logul de la turul 3?".
-                }
-
-                String filename = a.getType() + "-" + turn;
-                deque.addLast(new BankedArtifact(a.getType(), filename, summary, turn, Instant.now()));
-
-                while (deque.size() > BANK_MAX_ENTRIES) {
-                    deque.removeFirst();
-                }
+        Deque<BankedTurn> deque = artifactBank.computeIfAbsent(
+                conversationId, k -> new ArrayDeque<>());
+        synchronized (deque) {
+            deque.addLast(new BankedTurn(turn, labels.toString(),
+                    content.toString().strip(), Instant.now()));
+            while (deque.size() > BANK_MAX_TURNS) {
+                recordEvicted(conversationId, deque.removeFirst());
             }
         }
         return turn;
     }
 
-    /** Returns all banked artifacts for a conversation, ordered oldest-first. */
-    public List<BankedArtifact> getBankedArtifacts(String conversationId) {
-        Deque<BankedArtifact> deque = artifactBank.get(conversationId);
+    private void recordEvicted(String conversationId, BankedTurn evicted) {
+        Deque<String> ev = evictedTurnLabels.computeIfAbsent(conversationId, k -> new ArrayDeque<>());
+        synchronized (ev) {
+            ev.addLast("turn " + evicted.turnNumber() + ": " + evicted.label());
+            while (ev.size() > EVICTED_LABELS_MAX) ev.removeFirst();
+        }
+    }
+
+    /** Returns all banked turns for a conversation, ordered oldest-first. */
+    public List<BankedTurn> getBankedTurns(String conversationId) {
+        Deque<BankedTurn> deque = artifactBank.get(conversationId);
         if (deque == null) return List.of();
         synchronized (deque) {
             return List.copyOf(deque);
@@ -91,21 +105,32 @@ public class HistoryService {
     }
 
     /**
-     * Returns banked artifacts whose turn number is strictly less than {@code turn},
-     * ordered oldest-first. Used to exclude the current turn from the bank section.
+     * Returns banked turns whose turn number is strictly less than {@code turn}, ordered
+     * oldest-first. Used to exclude the current turn from the bank section (its artifacts are
+     * already in the current user message).
      */
-    public List<BankedArtifact> getBankedArtifactsBefore(String conversationId, long turn) {
-        Deque<BankedArtifact> deque = artifactBank.get(conversationId);
+    public List<BankedTurn> getBankedTurnsBefore(String conversationId, long turn) {
+        Deque<BankedTurn> deque = artifactBank.get(conversationId);
         if (deque == null) return List.of();
         synchronized (deque) {
             return deque.stream()
-                    .filter(ba -> ba.turnNumber() < turn)
+                    .filter(t -> t.turnNumber() < turn)
                     .collect(Collectors.toList());
+        }
+    }
+
+    /** Labels (filenames) of turns evicted from the bank — breadcrumbs, oldest-first. */
+    public List<String> getEvictedTurnLabels(String conversationId) {
+        Deque<String> ev = evictedTurnLabels.get(conversationId);
+        if (ev == null) return List.of();
+        synchronized (ev) {
+            return List.copyOf(ev);
         }
     }
 
     public void clearArtifacts(String conversationId) {
         artifactBank.remove(conversationId);
+        evictedTurnLabels.remove(conversationId);
         turnCounters.remove(conversationId);
     }
 
@@ -116,8 +141,18 @@ public class HistoryService {
     public void addEntry(String conversationId, String role, String content) {
         List<HistoryEntry> entries = history.computeIfAbsent(conversationId, k -> Collections.synchronizedList(new java.util.ArrayList<>()));
         entries.add(new HistoryEntry(role, content));
-        logger.info("Added {} to [{}]. Current conversation history size: {}", role, conversationId, entries.size());
-        logger.info("Active conversation IDs: {}", history.keySet());
+        logger.debug("Added {} to [{}]. Current conversation history size: {}", role, conversationId, entries.size());
+        logger.debug("Active conversation IDs: {}", history.keySet());
+    }
+
+    /**
+     * Persists an assistant turn: appends it, then trims to the most recent {@code maxRecent}
+     * entries. Summary scheduling and feedback recording stay in the caller (AiEngine), since
+     * those are LLM / feedback concerns rather than plain history bookkeeping.
+     */
+    public void appendAssistant(String conversationId, String content, int maxRecent) {
+        addEntry(conversationId, "assistant", content);
+        trimHistoryToLatest(conversationId, maxRecent);
     }
 
     public List<HistoryEntry> snapshotHistory(String conversationId) {
@@ -189,7 +224,7 @@ public class HistoryService {
 
     public List<HistoryEntry> getHistory(String conversationId) {
         List<HistoryEntry> h = history.getOrDefault(conversationId, Collections.emptyList());
-        logger.info("Retrieval for {} found {} entries", conversationId, h.size());
+        logger.debug("Retrieval for {} found {} entries", conversationId, h.size());
         return h;
     }
 

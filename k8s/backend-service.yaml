@@ -3,10 +3,13 @@ kind: Service
 metadata:
   name: backend
 spec:
-  type: ClusterIP
+  # NodePort ca nginx de pe lb-2 sa trimita /api/* direct la backend,
+  # ocolind proxy-ul Node al frontend-ului (care trunchiaza upload-urile multipart).
+  type: NodePort
   selector:
     app: backend
   ports:
     - name: http
       port: 8080
       targetPort: 8080
+      nodePort: 30083

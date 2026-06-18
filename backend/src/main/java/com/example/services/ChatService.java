@@ -222,7 +222,9 @@ public class ChatService {
             String prompt = "Generate a short title (max 8 words) that summarizes this conversation. " +
                     "Return ONLY the title, no quotes, no punctuation at the end.\n\n" + sb.toString().trim();
 
-            AiForwardingService.ForwardResult forwardResult = aiForwardingService.forward(userId, conversationId, prompt, null, requestId);
+            // ephemeral=true: the AI server ignores the conversationId so the title prompt
+            // and generated title are never persisted to conversation history.
+            AiForwardingService.ForwardResult forwardResult = aiForwardingService.forward(userId, conversationId, prompt, null, requestId, false, true);
             String aiTitle = forwardResult != null ? forwardResult.text() : null;
             if (aiForwardingService.isAiHttpError(aiTitle))
                 aiTitle = null;

@@ -69,7 +69,7 @@ public interface QaFeedbackRepository extends JpaRepository<QaFeedback, Long> {
      * feedback, source_urls, created_at, distance.
      */
     @Query(value = "SELECT id, conversation_id, user_question, ai_response, " +
-                   "embedding::text AS emb_text, feedback, source_urls, created_at, " +
+                   "CAST(embedding AS text) AS emb_text, feedback, source_urls, created_at, " +
                    "embedding <=> CAST(:queryVec AS vector) AS distance " +
                    "FROM qa_feedback " +
                    "WHERE embedding IS NOT NULL AND feedback >= 1 " +

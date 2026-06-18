@@ -9,8 +9,8 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,7 +31,6 @@ import java.util.Set;
 public class KubernetesDocsScraper {
 
     private static final Logger logger = LoggerFactory.getLogger(KubernetesDocsScraper.class);
-    private static final int STOPWORDS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
     private static final int DOC_FETCH_TIMEOUT_MS = 8000;
     private static final int MAX_CONTEXT_CHARS = 12000;
     // Hard cap against pathological pages returned by Readability (e.g. mirror sites with huge content)
@@ -51,10 +50,34 @@ public class KubernetesDocsScraper {
 
     private final KubernetesDocPageRepository repository;
     private final ChunkRetriever chunkRetriever;
-    private final RestTemplate restTemplate;
+
+    /**
+     * Number of top-ranked chunks retrieved per query.
+     * Sourced from {@code kdiag.retrieval.topk} (default 12), the single property
+     * shared by both retrieval engines (Lucene and Elastic), so the value is tunable
+     * via configuration instead of being hardcoded at the call sites.
+     */
+    @Value("${kdiag.retrieval.topk:12}")
+    private int retrievalTopK;
+
+    /**
+     * Standard English stop words, embedded directly in the application so keyword
+     * extraction works fully offline (air-gapped) with no network dependency. This
+     * replaces a previous remote fetch whose URL pointed at a path inside a .zip
+     * archive and therefore always returned HTTP 404.
+     */
+    private static final Set<String> ENGLISH_STOPWORDS = new HashSet<>(Arrays.asList(
+            ("a about above after again against all am an and any are aren't as at be because "
+           + "been before being below between both but by can't cannot could couldn't did didn't "
+           + "do does doesn't doing don't down during each few for from further had hadn't has "
+           + "hasn't have haven't having he her here hers herself him himself his how i if in into "
+           + "is isn't it its itself just me more most mustn't my myself no nor not of off on once "
+           + "only or other ought our ours ourselves out over own same shan't she should shouldn't "
+           + "so some such than that the their theirs them themselves then there these they this "
+           + "those through to too under until up very was wasn't we were weren't what when where "
+           + "which while who whom why with won't would wouldn't you your yours yourself yourselves").split(" ")));
 
     private Set<String> stopWords = new HashSet<>();
-    private long lastStopwordsFetch = 0;
 
         // Pages to index - ordered by relevance
     private static final List<String> DOC_URLS = List.of(
@@ -68,37 +91,13 @@ public class KubernetesDocsScraper {
                                  @Qualifier("activeChunkRetriever") ChunkRetriever chunkRetriever) {
         this.repository     = repository;
         this.chunkRetriever = chunkRetriever;
-        this.restTemplate   = new RestTemplate();
     }
 
     private void ensureStopwordsLoaded() {
-        // Cache for 24 hours
-        if (System.currentTimeMillis() - lastStopwordsFetch > STOPWORDS_CACHE_TTL_MS || stopWords.isEmpty()) {
-            try {
-                logger.info("Fetching English stop words from NLTK/GitHub API...");
-                // Fetch standard english stopwords list from a reliable public source
-                String url = "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/stopwords.zip/stopwords/english";
-                String response = restTemplate.getForObject(url, String.class);
-
-                if (response != null) {
-                    Set<String> fetched = new HashSet<>();
-                    for (String line : response.split("\n")) {
-                        if (!line.trim().isEmpty()) {
-                            fetched.add(line.trim().toLowerCase());
-                        }
-                    }
-                    this.stopWords = fetched;
-                    this.lastStopwordsFetch = System.currentTimeMillis();
-                    logger.info("Loaded {} stop words from API.", stopWords.size());
-                }
-            } catch (Exception e) {
-                logger.error("Failed to fetch stopwords from API, falling back to minimal list", e);
-                // Minimal fallback in case of no internet on boot
-                if (stopWords.isEmpty()) {
-                    stopWords = new HashSet<>(
-                            Arrays.asList("the", "and", "a", "an", "in", "on", "at", "to", "for", "of", "with"));
-                }
-            }
+        // Load the embedded list once; no network call, so this never fails or spams logs.
+        if (stopWords.isEmpty()) {
+            stopWords = new HashSet<>(ENGLISH_STOPWORDS);
+            logger.info("Loaded {} embedded English stop words.", stopWords.size());
         }
     }
 
@@ -166,7 +165,7 @@ public class KubernetesDocsScraper {
      * fall back to {@link #getRelevantDocs(String)}.
      */
     public String getRelevantDocsByBm25(String userMessage, int maxContextChars) {
-        List<DocChunk> chunks = chunkRetriever.search(userMessage, 12);
+        List<DocChunk> chunks = chunkRetriever.search(userMessage, retrievalTopK);
         if (chunks.isEmpty()) return "";
         return assembleContext(chunks, maxContextChars);
     }
@@ -182,7 +181,7 @@ public class KubernetesDocsScraper {
      */
     public String getRelevantDocsByBm25Boosted(String userMessage, int maxContextChars,
                                                Set<String> boostedUrls) {
-        List<DocChunk> chunks = chunkRetriever.search(userMessage, 12, boostedUrls);
+        List<DocChunk> chunks = chunkRetriever.search(userMessage, retrievalTopK, boostedUrls);
         if (chunks.isEmpty()) return "";
         return assembleContext(chunks, maxContextChars);
     }

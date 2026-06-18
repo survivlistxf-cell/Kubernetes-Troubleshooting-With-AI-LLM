@@ -24,7 +24,8 @@ public class AiForwardingService {
 
     private static final Logger logger = LoggerFactory.getLogger(AiForwardingService.class);
     private static final int CONNECT_TIMEOUT_MS = 3_000;
-    private static final int READ_TIMEOUT_MS = 65_000;
+    // Inferenta pe CPU (llama3.1 8B) poate dura minute — 300s ca sa nu taie raspunsul.
+    private static final int READ_TIMEOUT_MS = 300_000;
 
     public record ForwardResult(String text, String conversationId) {
     }
@@ -70,7 +71,27 @@ public class AiForwardingService {
      */
     public ForwardResult forward(String userIdValue, String conversationId, String userMessage, Object attachmentsObj,
             String requestId) {
-        logger.info("[{}] Backend Forwarding: user={} conv={}", requestId, userIdValue, conversationId);
+        return forward(userIdValue, conversationId, userMessage, attachmentsObj, requestId, true);
+    }
+
+    /**
+     * @param recordExchange whether the AI server should persist this exchange to qa_feedback
+     *                       for case-based retrieval. Pass false for internal utility calls
+     *                       (e.g. title generation) so they don't pollute the feedback table.
+     */
+    public ForwardResult forward(String userIdValue, String conversationId, String userMessage, Object attachmentsObj,
+            String requestId, boolean recordExchange) {
+        return forward(userIdValue, conversationId, userMessage, attachmentsObj, requestId, recordExchange, false);
+    }
+
+    /**
+     * @param ephemeral when true, the AI server ignores conversationId and persists nothing to
+     *                  history. Use for meta requests (e.g. title generation) so they never appear
+     *                  as real turns in the conversation. Implies recordExchange=false.
+     */
+    public ForwardResult forward(String userIdValue, String conversationId, String userMessage, Object attachmentsObj,
+            String requestId, boolean recordExchange, boolean ephemeral) {
+        logger.info("[{}] Backend Forwarding: user={} conv={} ephemeral={}", requestId, userIdValue, conversationId, ephemeral);
         try {
             List<Map<String, Object>> artifacts = processIncomingAttachments(attachmentsObj, requestId);
 
@@ -87,10 +108,13 @@ public class AiForwardingService {
             // Folosind protocolul kdiag/1.0
             Map<String, Object> messageObj = Map.of("role", "user", "text", safeText);
 
-            Map<String, Object> kdiag = (artifacts == null || artifacts.isEmpty())
-                    ? Map.of("protocol_version", "kdiag/1.0", "conversation_id", conversationId, "message", messageObj)
-                    : Map.of("protocol_version", "kdiag/1.0", "conversation_id", conversationId, "message", messageObj,
-                            "artifacts", artifacts);
+            Map<String, Object> kdiag = new java.util.LinkedHashMap<>();
+            kdiag.put("protocol_version", "kdiag/1.0");
+            kdiag.put("conversation_id", conversationId);
+            kdiag.put("message", messageObj);
+            kdiag.put("recordExchange", ephemeral ? false : recordExchange);
+            if (ephemeral) kdiag.put("ephemeral", true);
+            if (artifacts != null && !artifacts.isEmpty()) kdiag.put("artifacts", artifacts);
 
             // Aici logam mesajul care va fi trimis catre serverul AI
             logOutgoingPayload(kdiag, requestId);
@@ -210,7 +234,7 @@ public class AiForwardingService {
                     .bodyValue(kdiag)
                     .retrieve()
                     .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
-                    .timeout(Duration.ofSeconds(120))
+                    .timeout(Duration.ofSeconds(300))
                     .onErrorResume(e -> {
                         logger.error("[{}] SSE stream forward failed", requestId, e);
                         return Flux.just(ServerSentEvent.<String>builder()

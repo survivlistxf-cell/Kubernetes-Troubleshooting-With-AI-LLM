@@ -68,7 +68,7 @@ BM25 (Best Matching 25) e un algoritm de scoring pentru text retrieval, dezvolta
 
 **Dependențe:** `org.apache.lucene:lucene-core`, `lucene-analysis-common`, `lucene-queryparser` toate la `9.11.1`
 
-**Configurare:** `kdiag.lucene.dir=./lucene_index`, `kdiag.lucene.topk=12`
+**Configurare:** `kdiag.lucene.dir=./lucene_index`, `kdiag.retrieval.topk=12` (vezi punctul 12 — proprietate unică, partajată de ambele motoare)
 
 ### 3. Streaming SSE end-to-end + num_ctx + limite mărite
 
@@ -199,7 +199,7 @@ cu index HNSW pe embedding pentru cosine similarity search.
 
 **Problema identificată:** până la această optimizare, bugetele erau statice — `MAX_RAG_CONTEXT_CHARS = 12000`, `MAX_ARTIFACT_PROMPT_CHARS = 6000` per artefact, până la `MAX_ARTIFACTS_PER_REQUEST = 5`. Asta însemna trei probleme concrete:
 1. **Risipă teoretică de buget** — 5 artefacte × 6000 chars = 30.000 chars, mai mult decât `MAX_TOTAL_PROMPT_CHARS = 28000` per total. Bugetul actual scădea prin `truncateToBudget` aplicat in-flight pe mesaje, tăind agresiv din istoric și uneori chiar din artefactele turnului curent.
-2. **Artefacte pierdute peste turnuri** — un `kubectl describe pod` atașat la turn 1 dispărea complet din context la turn 5, când mesajul lui era trimmat din istoric. LLM-ul „uita" evidence-ul concret.
+2. **Artefacte pierdute peste turns** — un `kubectl describe pod` atașat la turn 1 dispărea complet din context la turn 5, când mesajul lui era trimmat din istoric. LLM-ul „uita" evidence-ul concret.
 3. **Repetare inutilă a preambulului** — system prompt-ul cu identitate + reguli de format era re-trimis verbatim la fiecare turn, deși LLM-ul îl văzuse deja.
 
 **Soluție în trei piese conectate:**
@@ -428,6 +428,24 @@ CSS: `.system-status-message` — italic, gri-700, font mai mic, fără avatar, 
 
 **Trade-off UX:** worst case +2-5s la primul token *real* al răspunsului (după status events). Best case +50-200ms. Față de versiunea fără status events: aceeași latență totală, dar **percepție mult mai bună** — userul vede progres concret, nu blackout.
 
+### 12. Unificarea top-K într-o singură proprietate partajată
+
+**Problema:** top-K-ul (numărul de chunks returnate per căutare) era hardcodat ca literalul `12` în `KubernetesDocsScraper`, la ambele apeluri de retrieval (`getRelevantDocsByBm25` și `getRelevantDocsByBm25Boosted`). Proprietatea `kdiag.lucene.topk=12` exista în `application.properties`, dar nu era injectată nicăieri, deci modificarea ei nu avea niciun efect. În paralel, ElasticSearch avea propria proprietate `kdiag.elastic.topk` (citită în câmpul `defaultTopK`), iar `KubernetesDocsScraper` e agnostic față de motor — pasează același top-K oricărui `ChunkRetriever` activ prin parametru. Rezultau două proprietăți pentru același concept, una moartă și una nefolosită la calea reală de căutare.
+
+**Soluție:** o singură proprietate `kdiag.retrieval.topk`, partajată de ambele motoare.
+
+```properties
+# inlocuieste kdiag.lucene.topk si kdiag.elastic.topk
+kdiag.retrieval.topk=${KDIAG_RETRIEVAL_TOPK:12}
+```
+
+**Modificări:**
+- `KubernetesDocsScraper.java` — câmp nou `@Value("${kdiag.retrieval.topk:12}") private int retrievalTopK;`. Cele două apeluri `chunkRetriever.search(userMessage, 12 ...)` folosesc acum `retrievalTopK`. Top-K-ul ajunge la motorul activ (Lucene sau ES) prin parametrul de căutare, deci o singură valoare controlează ambele.
+- `ElasticChunkRetriever.java` — `@Value` pe câmpul `defaultTopK` repointat de la `kdiag.elastic.topk` la `kdiag.retrieval.topk` (numele câmpului rămâne neschimbat, deci `ElasticChunkRetrieverTest` care îl setează prin `ReflectionTestUtils.setField(..., "defaultTopK", 12)` nu e afectat).
+- `application.properties` — eliminate `kdiag.lucene.topk` și `kdiag.elastic.topk`; adăugat `kdiag.retrieval.topk`, override-abil din mediu prin `KDIAG_RETRIEVAL_TOPK`.
+
+**De ce nu hardcodat:** acum schimbarea valorii în config (sau prin env la deploy) chiar reconfigurează câte chunks intră în context, indiferent de motorul activ. Înainte, valoarea era fixă în cod și proprietatea era decorativă.
+
 ## Sumar arhitectural — înainte vs după
 
 | Aspect | Înainte | După |
@@ -496,7 +514,7 @@ ollama.num-ctx=${OLLAMA_NUM_CTX:8192}
 ollama.embedding-model=${OLLAMA_EMBEDDING_MODEL:nomic-embed-text}
 ollama.embedding-timeout-seconds=${OLLAMA_EMBEDDING_TIMEOUT:30}
 kdiag.lucene.dir=./lucene_index
-kdiag.lucene.topk=12
+kdiag.retrieval.topk=${KDIAG_RETRIEVAL_TOPK:12}
 kdiag.cleanup.dynamic.enabled=${KDIAG_CLEANUP_ENABLED:true}
 kdiag.cleanup.dynamic.age-days=${KDIAG_CLEANUP_AGE_DAYS:30}
 kdiag.cleanup.dynamic.cron=${KDIAG_CLEANUP_CRON:0 0 3 * * SUN}

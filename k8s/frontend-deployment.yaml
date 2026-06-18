@@ -15,7 +15,7 @@ spec:
       containers:
         - name: frontend
           image: axiiiiiiii/proiect_licenta-frontend:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 3000
               name: http

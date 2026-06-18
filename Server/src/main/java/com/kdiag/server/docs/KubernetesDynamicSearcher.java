@@ -5,14 +5,17 @@ import com.kdiag.server.entities.KubernetesDocPage;
 import com.kdiag.server.entities.ProblemResolution;
 import com.kdiag.server.repositories.KubernetesDocPageRepository;
 import com.kdiag.server.repositories.ProblemResolutionRepository;
+import org.jsoup.Connection;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -26,8 +29,10 @@ import java.util.Set;
 public class KubernetesDynamicSearcher {
 
     private static final Logger logger = LoggerFactory.getLogger(KubernetesDynamicSearcher.class);
-    private static final int DDG_TIMEOUT_MS = 10000;
+    private static final int BRAVE_TIMEOUT_MS = 10000;
     private static final int MAX_SEARCH_RESULTS = 2;
+    // Default per-dynamic-doc cap used when no explicit budget is passed (backward-compat).
+    // Callers that know the live context window (AiEngine) pass a num_ctx-scaled value instead.
     private static final int MAX_DYNAMIC_DOC_CHARS = 10000;
     // Hard cap against pathological pages returned by Readability (e.g. mirror sites with huge content)
     static final int ABSOLUTE_PERSIST_CHAR_CAP = 500_000;
@@ -35,56 +40,103 @@ public class KubernetesDynamicSearcher {
     private final KubernetesDocPageRepository docRepository;
     private final ProblemResolutionRepository resolutionRepository;
     private final ChunkRetriever chunkRetriever;
+    private final String braveApiKey;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /** Result of a dynamic search: the assembled doc context plus the URLs it was built from. */
+    public record SearchResult(String context, List<String> urls) {}
 
     public KubernetesDynamicSearcher(KubernetesDocPageRepository docRepository,
                                      ProblemResolutionRepository resolutionRepository,
-                                     @Qualifier("activeChunkRetriever") ChunkRetriever chunkRetriever) {
+                                     @Qualifier("activeChunkRetriever") ChunkRetriever chunkRetriever,
+                                     @Value("${BRAVE_API_KEY:}") String braveApiKey) {
         this.docRepository = docRepository;
         this.resolutionRepository = resolutionRepository;
         this.chunkRetriever = chunkRetriever;
+        this.braveApiKey = braveApiKey;
     }
 
     /**
-     * Conducts a DuckDuckGo HTML search bounded to kubernetes.io,
-     * scrapes the top URLs and saves them to knowledge base.
+     * Conducts a Brave Search API query bounded to kubernetes.io/docs, then fetches the
+     * top result pages and saves them to the knowledge base.
+     *
+     * <p>This previously scraped DuckDuckGo's HTML endpoint, but DDG returns HTTP 202 plus
+     * an anti-bot form page for requests originating from datacenter IPs (such as the
+     * cluster), so no results could ever be parsed. Brave exposes a stable JSON API.
+     *
+     * <p>Requires the {@code BRAVE_API_KEY} environment variable. When it is absent, dynamic
+     * web search degrades gracefully to a no-op, which keeps the system usable in
+     * air-gapped deployments where outbound egress is disabled.
      */
-    public String searchAndSave(String conversationId, String query) {
-        logger.info("Scraping search results for: {}", query);
+    /** Backward-compatible entry point using the default per-doc cap. */
+    public SearchResult searchAndSave(String conversationId, String query) {
+        return searchAndSave(conversationId, query, MAX_DYNAMIC_DOC_CHARS);
+    }
+
+    /**
+     * Same as {@link #searchAndSave(String, String)} but with an explicit per-dynamic-doc char
+     * cap, so callers can scale how much web documentation is pulled with the live context window.
+     */
+    public SearchResult searchAndSave(String conversationId, String query, int maxDocChars) {
+        logger.info("Web search (Brave) for: {}", query);
         List<String> foundUrls = new ArrayList<>();
         StringBuilder newContext = new StringBuilder();
 
+        if (braveApiKey == null || braveApiKey.isBlank()) {
+            logger.warn("BRAVE_API_KEY not configured; dynamic web search disabled (returning empty context).");
+            return new SearchResult(newContext.toString(), foundUrls);
+        }
+
         try {
-            // Use DDG HTML version to bypass JS requirements
-            String searchUrl = "https://html.duckduckgo.com/html/?q=site:kubernetes.io/docs+" + URLEncoder.encode(query, StandardCharsets.UTF_8);
-            logger.info("Asking DDG: {}", searchUrl);
+            String fullQuery = "site:kubernetes.io/docs " + query;
+            String braveUrl = "https://api.search.brave.com/res/v1/web/search?count=10&q="
+                    + URLEncoder.encode(fullQuery, StandardCharsets.UTF_8);
+            logger.info("Asking Brave: q='{}'", fullQuery);
 
-            Document searchDoc = Jsoup.connect(searchUrl)
-                    .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    .timeout(DDG_TIMEOUT_MS)
-                    .get();
+            Connection.Response resp = Jsoup.connect(braveUrl)
+                    .header("Accept", "application/json")
+                    .header("X-Subscription-Token", braveApiKey)
+                    .timeout(BRAVE_TIMEOUT_MS )
+                    .ignoreHttpErrors(true)
+                    .ignoreContentType(true)
+                    .maxBodySize(0)
+                    .method(Connection.Method.GET)
+                    .execute();
 
-            // DDG HTML snippet URLs are stored inside a.result__url as raw text
-            Elements resultAnchors = searchDoc.select("a.result__url");
+            String body = resp.body();
+            int bodyLength = body == null ? 0 : body.length();
+
+            if (resp.statusCode() != 200) {
+                logger.warn("Brave API returned status {} (bodyLength={}). Snippet: {}",
+                        resp.statusCode(), bodyLength,
+                        body == null ? "" : body.substring(0, Math.min(500, body.length())));
+                return new SearchResult(newContext.toString(), foundUrls);
+            }
+
+            JsonNode results = objectMapper.readTree(body == null ? "{}" : body)
+                    .path("web").path("results");
+            logger.info("Brave response for '{}': statusCode={}, bodyLength={}, results={}",
+                    query, resp.statusCode(), bodyLength, results.isArray() ? results.size() : 0);
+
             int count = 0;
-            for (Element a : resultAnchors) {
-                if (count >= MAX_SEARCH_RESULTS) break; // Fetch a small bounded set to avoid LLM context overflow
-                String displayUrl = a.text().trim();
+            if (results.isArray()) {
+                for (JsonNode r : results) {
+                    if (count >= MAX_SEARCH_RESULTS) break; // Bounded set to avoid LLM context overflow
+                    String url = r.path("url").asText("");
+                    if (url.isBlank()) continue;
+                    logger.info("Brave candidate URL (pre-filter): {}", url);
 
-                // Format URL
-                if (!displayUrl.startsWith("http")) {
-                    displayUrl = "https://" + displayUrl;
-                }
+                    if (url.contains("kubernetes.io/docs/")) {
+                        logger.info("Discovered URL: {}", url);
+                        foundUrls.add(url);
 
-                if (displayUrl.contains("kubernetes.io/docs/")) {
-                    logger.info("Discovered URL: {}", displayUrl);
-                    foundUrls.add(displayUrl);
-
-                    String text = fetchAndSaveDoc(displayUrl);
-                    if (!text.isEmpty()) {
-                        // Deduplicate repetitive paragraphs and limit per dynamic doc to keep prompt size stable
-                        String deduped = dedupeParagraphs(text, MAX_DYNAMIC_DOC_CHARS);
-                        newContext.append("## Source: ").append(displayUrl).append("\n").append(deduped).append("\n\n");
-                        count++;
+                        String text = fetchAndSaveDoc(url, maxDocChars);
+                        if (!text.isEmpty()) {
+                            // Deduplicate repetitive paragraphs and limit per dynamic doc to keep prompt size stable
+                            String deduped = dedupeParagraphs(text, maxDocChars);
+                            newContext.append("## Source: ").append(url).append("\n").append(deduped).append("\n\n");
+                            count++;
+                        }
                     }
                 }
             }
@@ -107,20 +159,20 @@ public class KubernetesDynamicSearcher {
         } catch (Exception ignored) {
         }
 
-        return newContext.toString();
+        return new SearchResult(newContext.toString(), foundUrls);
     }
 
-    private String fetchAndSaveDoc(String url) {
+    private String fetchAndSaveDoc(String url, int maxDocChars) {
         Optional<KubernetesDocPage> existing = docRepository.findByUrl(url);
         if (existing.isPresent()) {
             logger.info("URL already in DB: {}", url);
-            return truncate(existing.get().getTextContent(), MAX_DYNAMIC_DOC_CHARS);
+            return truncate(existing.get().getTextContent(), maxDocChars);
         }
 
         try {
             Document doc = Jsoup.connect(url)
                     .userAgent("Mozilla/5.0 (compatible; Kubexplain/1.0)")
-                    .timeout(DDG_TIMEOUT_MS)
+                    .timeout(BRAVE_TIMEOUT_MS )
                     .get();
 
             ReadabilityExtractor.Result result = ReadabilityExtractor.extract(url, doc, this::legacyExtract);
@@ -138,7 +190,7 @@ public class KubernetesDynamicSearcher {
             chunkRetriever.indexPage(page);
 
             // For dynamic inclusion, deduplicate and cap the snippet to avoid sending huge prompts
-            String deduped = dedupeParagraphs(content, MAX_DYNAMIC_DOC_CHARS);
+            String deduped = dedupeParagraphs(content, maxDocChars);
             return deduped;
         } catch (Exception e) {
             logger.error("Failed to fetch {}", url, e);

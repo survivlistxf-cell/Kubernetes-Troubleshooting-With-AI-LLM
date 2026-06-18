@@ -19,7 +19,7 @@ spec:
           # Construit din ./Server (modulul com.kdiag.server, artifact ai-server-0.1.0).
           # Vezi README pentru build & push.
           image: axiiiiiiii/proiect_licenta-ai-server:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 8090
               name: http
@@ -37,14 +37,26 @@ spec:
             # --- Ollama (pe VM-ul dedicat, via service ClusterIP) ---
             - name: OLLAMA_BASE_URL
               value: http://ollama:11434
+            # Model mic pentru viteza pe CPU (fara GPU). Cand ai GPU pe nodul
+            # ollama, schimba inapoi pe "llama3.1" pentru calitate maxima.
             - name: OLLAMA_MODEL
-              value: llama3.1
+              value: llama3.2:3b
             - name: OLLAMA_EMBEDDING_MODEL
               value: nomic-embed-text
+            # Inferenta pe CPU e lenta — marim timeout-urile (implicit 60s/30s).
+            - name: OLLAMA_TIMEOUT_SECONDS
+              value: "300"
+            - name: OLLAMA_EMBEDDING_TIMEOUT
+              value: "120"
             # --- Retrieval pe ElasticSearch ---
             - name: KDIAG_RETRIEVAL_ENGINE
               value: elastic
             - name: KDIAG_ELASTIC_URI
+              value: http://elasticsearch:9200
+            # Clientul ES auto-configurat de Spring Boot (folosit de health
+            # indicator-ul actuator) — altfel ramane pe localhost:9200 si da
+            # "Connection refused", picand /actuator/health.
+            - name: SPRING_ELASTICSEARCH_URIS
               value: http://elasticsearch:9200
             # --- PostgreSQL (acelasi DB ca backend-ul) ---
             - name: SPRING_DATASOURCE_URL
@@ -55,17 +67,34 @@ spec:
               value: postgres
             - name: SPRING_JPA_HIBERNATE_DDL_AUTO
               value: update
+            - name: BRAVE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: brave-api
+                  key: api-key
+          # Pana porneste complet (pull context, conectare la ES/DB), startupProbe
+          # tine liveness-ul deoparte. Permite ~5 min la primul boot.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8090
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 30
+          # Readiness: grupul "readiness" (starea interna a app-ului), nu agregatul
+          # care include ES/DB — asa pod-ul devine Ready cand contextul e pornit.
           readinessProbe:
             httpGet:
-              path: /actuator/health
+              path: /actuator/health/readiness
               port: 8090
-            initialDelaySeconds: 45
             periodSeconds: 10
             timeoutSeconds: 5
+          # Liveness: grupul "liveness" NU depinde de dependinte externe, deci o
+          # problema temporara la ES/DB nu mai omoara pod-ul.
           livenessProbe:
             httpGet:
-              path: /actuator/health
+              path: /actuator/health/liveness
               port: 8090
-            initialDelaySeconds: 120
             periodSeconds: 20
             timeoutSeconds: 5
+            failureThreshold: 3

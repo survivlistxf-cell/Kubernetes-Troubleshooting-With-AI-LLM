@@ -26,7 +26,7 @@ COPY --from=builder /app/target/*.jar app.jar
 EXPOSE 8090
 
 # Environment variables (optional)
-ENV JAVA_OPTS="-Xmx1536m -Xms768m"
+ENV JAVA_OPTS="-Xmx1536m -Xms768m -Djava.net.preferIPv4Stack=true"
 
 # Run the application
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

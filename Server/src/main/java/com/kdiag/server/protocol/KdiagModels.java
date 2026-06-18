@@ -44,6 +44,20 @@ public final class KdiagModels {
 
         private Map<String, Object> preferences;
 
+        /**
+         * Whether this exchange should be persisted to qa_feedback for case-based retrieval.
+         * Defaults to true; internal utility calls (e.g. title generation) send false so they
+         * don't pollute the feedback table.
+         */
+        private Boolean recordExchange = Boolean.TRUE;
+
+        /**
+         * When true, the request is treated as ephemeral: conversationId is ignored, nothing is
+         * persisted to history, and no QA exchange is recorded. Use for meta requests such as
+         * title generation so they do not appear as real turns in the conversation.
+         */
+        private Boolean ephemeral = Boolean.FALSE;
+
         @JsonProperty("protocol_version")
         public String getProtocol_version() {
             return protocol_version;
@@ -98,6 +112,22 @@ public final class KdiagModels {
 
         public void setPreferences(Map<String, Object> preferences) {
             this.preferences = preferences;
+        }
+
+        public Boolean getRecordExchange() {
+            return recordExchange;
+        }
+
+        public void setRecordExchange(Boolean recordExchange) {
+            this.recordExchange = recordExchange;
+        }
+
+        public Boolean getEphemeral() {
+            return ephemeral;
+        }
+
+        public void setEphemeral(Boolean ephemeral) {
+            this.ephemeral = ephemeral;
         }
     }
 
@@ -279,9 +309,13 @@ public final class KdiagModels {
         private String container;
 
         /**
-         * Raw content (logs/describe/events). Keep it as string for MVP.
+         * Raw content (logs/describe/events), or a whole "BULK POD CONTEXT" blob.
+         * The cap is the inbound gate only: a single full pod dump (describe+json+events+logs)
+         * can reach ~26 KB, and multi-pod bulks several times that. AiEngine.processArtifacts
+         * splits + per-section-caps this down before the prompt budget ever sees it, so the
+         * gate just needs to be generous enough not to 400 a legitimate multi-pod attach.
          */
-        @Size(max = 20000)
+        @Size(max = 200000)
         private String content;
 
         /**

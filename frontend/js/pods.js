@@ -54,7 +54,12 @@ function setMultiNamespaceMode(mode) {
 }
 
 function getSelectedPodLevels() {
-  return Array.from(document.querySelectorAll('.pod-detail-level:checked')).map(cb => cb.value);
+  // 'json' is intentionally excluded from LLM context: the pod manifest is largely
+  // redundant with 'describe' but costs far more tokens. The JSON viewer tab in the
+  // pod-details modal stays available for manual inspection only.
+  return Array.from(document.querySelectorAll('.pod-detail-level:checked'))
+    .map(cb => cb.value)
+    .filter(lvl => lvl !== 'json');
 }
 
 // Stable selection key: includes cluster prefix only when in multi-cluster mode,

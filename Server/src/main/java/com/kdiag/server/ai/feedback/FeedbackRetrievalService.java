@@ -87,7 +87,8 @@ public class FeedbackRetrievalService {
     // -------------------------------------------------------------------------
 
     /** A liked Q&A pair from the qa_feedback table, retrieved by ANN similarity. */
-    public record SimilarCase(long id, String userQuestion, String aiResponse, double similarity) {}
+    public record SimilarCase(long id, String userQuestion, String aiResponse, double similarity,
+                              List<String> sourceUrls) {}
 
     // =========================================================================
     // WRITE SIDE
@@ -203,10 +204,12 @@ public class FeedbackRetrievalService {
                 double distance   = ((Number) r[8]).doubleValue();  // 0=identical, 1=orthogonal
                 double similarity = 1.0 - distance;
                 if (similarity < SIMILARITY_THRESHOLD) continue;
+                Object rawSourceUrls = r[6];
                 out.add(new SimilarCase(id,
                         truncate(question, MAX_CASE_QUESTION_CHARS),
                         truncate(response, MAX_CASE_RESPONSE_CHARS),
-                        similarity));
+                    similarity,
+                    parseSourceUrls(rawSourceUrls == null ? null : rawSourceUrls.toString())));
             }
             logger.info("findSimilarCases: returned {} hits >= {} for question ({} chars)",
                     out.size(), SIMILARITY_THRESHOLD, userQuestion.length());
@@ -261,5 +264,26 @@ public class FeedbackRetrievalService {
     private static String truncate(String s, int max) {
         if (s == null) return "";
         return s.length() <= max ? s : s.substring(0, max) + "...";
+    }
+
+    static List<String> parseSourceUrls(String sourceUrls) {
+        try {
+            if (sourceUrls == null || sourceUrls.isBlank()) {
+                return List.of();
+            }
+            List<String> out = new ArrayList<>();
+            for (String url : sourceUrls.split("\\R")) {
+                String trimmed = url.trim();
+                if (trimmed.startsWith("http")) {
+                    out.add(trimmed);
+                    if (out.size() >= 5) {
+                        break;
+                    }
+                }
+            }
+            return out.isEmpty() ? List.of() : List.copyOf(out);
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 }

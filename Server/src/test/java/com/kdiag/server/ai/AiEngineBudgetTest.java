@@ -1,5 +1,7 @@
 package com.kdiag.server.ai;
 
+import com.kdiag.server.ai.helpers.BudgetComputing;
+import com.kdiag.server.ai.helpers.PromptsBuilder;
 import com.kdiag.server.ai.history.HistoryService;
 import com.kdiag.server.protocol.KdiagModels.Artifact;
 
@@ -16,10 +18,23 @@ class AiEngineBudgetTest {
 
     private AiEngine engine;
 
+    // Arbitrary fixed input capacity for deterministic budget tests (independent of num_ctx /
+    // output-reserve config). Budgets are derived from it via the same fraction helpers the
+    // production code uses, so the assertions track the policy instead of hardcoded magic numbers.
+    private static final int CAP     = 92160;
+    private static final int MAX_ART = BudgetComputing.artifactCapFor(CAP); // 41472
+    private static final int MAX_RAG = BudgetComputing.ragMaxFor(CAP);      // 30412
+    private static final int MIN_RAG = BudgetComputing.ragMinFor(CAP);      // 11980
+    private static final double RATIO = 0.5;
+
+    private static int expectedRag(int used) {
+        return Math.max(MIN_RAG, MAX_RAG - (int) Math.round(used * RATIO));
+    }
+
     @BeforeEach
     void setUp() {
-        // computeArtifactBudget uses no injected fields — null deps are safe here
-        engine = new AiEngine(null, null, null, null, null, null);
+        // computeArtifactBudget(artifacts, inputChars) uses no injected fields — null deps are safe
+        engine = new AiEngine(null, null, null, null, null, null, null, null);
     }
 
     // -----------------------------------------------------------------------
@@ -28,10 +43,10 @@ class AiEngineBudgetTest {
 
     @Test
     void emptyList_returnsZeroArtifactsAndMaxRag() {
-        AiEngine.ArtifactBudget budget = engine.computeArtifactBudget(List.of());
+        BudgetComputing.ArtifactBudget budget = BudgetComputing.computeArtifactBudget(List.of(), CAP);
         assertArrayEquals(new int[0], budget.perArtifactChars());
         assertEquals(0, budget.totalArtifactChars());
-        assertEquals(14000, budget.ragChars());
+        assertEquals(MAX_RAG, budget.ragChars());
     }
 
     // -----------------------------------------------------------------------
@@ -40,39 +55,37 @@ class AiEngineBudgetTest {
 
     @Test
     void singleSmallArtifact_fullAllocationAndReducedRag() {
-        AiEngine.ArtifactBudget budget = engine.computeArtifactBudget(List.of(artifact(2000)));
+        BudgetComputing.ArtifactBudget budget = BudgetComputing.computeArtifactBudget(List.of(artifact(2000)), CAP);
         assertArrayEquals(new int[]{2000}, budget.perArtifactChars());
         assertEquals(2000, budget.totalArtifactChars());
-        // ragChars = max(6000, 14000 - round(2000 * 0.5)) = max(6000, 13000) = 13000
-        assertEquals(13000, budget.ragChars());
+        assertEquals(expectedRag(2000), budget.ragChars());
     }
 
     // -----------------------------------------------------------------------
-    // Test 3: single huge artifact (30000 chars) — capped at 15000
+    // Test 3: single huge artifact — capped at MAX_ART
     // -----------------------------------------------------------------------
 
     @Test
-    void singleHugeArtifact_cappedAt15000AndMinRag() {
-        AiEngine.ArtifactBudget budget = engine.computeArtifactBudget(List.of(artifact(30000)));
-        assertArrayEquals(new int[]{15000}, budget.perArtifactChars());
-        assertEquals(15000, budget.totalArtifactChars());
-        // ragChars = max(6000, 14000 - round(15000 * 0.5)) = max(6000, 14000-7500) = max(6000,6500) = 6500
-        assertEquals(6500, budget.ragChars());
+    void singleHugeArtifact_cappedAndMinRag() {
+        BudgetComputing.ArtifactBudget budget = BudgetComputing.computeArtifactBudget(List.of(artifact(200000)), CAP);
+        assertArrayEquals(new int[]{MAX_ART}, budget.perArtifactChars());
+        assertEquals(MAX_ART, budget.totalArtifactChars());
+        assertEquals(expectedRag(MAX_ART), budget.ragChars());
     }
 
     // -----------------------------------------------------------------------
-    // Test 4: FIFO truncation across three artifacts [4000, 5000, 11000]
+    // Test 4: FIFO truncation across three artifacts
     // -----------------------------------------------------------------------
 
     @Test
     void threeArtifacts_fifoTruncation() {
-        List<Artifact> arts = List.of(artifact(4000), artifact(5000), artifact(11000));
-        AiEngine.ArtifactBudget budget = engine.computeArtifactBudget(arts);
-        // Allocation: 4000 (used=4000), 5000 (used=9000), min(11000, 15000-9000)=6000 (used=15000)
-        assertArrayEquals(new int[]{4000, 5000, 6000}, budget.perArtifactChars());
-        assertEquals(15000, budget.totalArtifactChars());
-        // ragChars = max(6000, 14000 - round(15000 * 0.5)) = max(6000, 6500) = 6500
-        assertEquals(6500, budget.ragChars());
+        List<Artifact> arts = List.of(artifact(20000), artifact(20000), artifact(20000));
+        BudgetComputing.ArtifactBudget budget = BudgetComputing.computeArtifactBudget(arts, CAP);
+        // 20000 (used=20000), 20000 (used=40000), min(20000, MAX_ART-40000) for the third
+        int third = MAX_ART - 40000;
+        assertArrayEquals(new int[]{20000, 20000, third}, budget.perArtifactChars());
+        assertEquals(MAX_ART, budget.totalArtifactChars());
+        assertEquals(expectedRag(MAX_ART), budget.ragChars());
     }
 
     // -----------------------------------------------------------------------
@@ -88,80 +101,72 @@ class AiEngineBudgetTest {
             for (int i = 0; i < n; i++) {
                 arts.add(artifact(rng.nextInt(50001)));
             }
-            AiEngine.ArtifactBudget budget = engine.computeArtifactBudget(arts);
-            assertTrue(budget.totalArtifactChars() <= 15000,
-                    "totalArtifactChars must be <= 15000, was " + budget.totalArtifactChars());
-            assertTrue(budget.ragChars() >= 6000,
-                    "ragChars must be >= 6000, was " + budget.ragChars());
-            assertTrue(budget.ragChars() <= 14000,
-                    "ragChars must be <= 14000, was " + budget.ragChars());
-            assertTrue(budget.totalArtifactChars() + budget.ragChars() <= 21500,
-                    "totalArtifactChars + ragChars must be <= 21500, was "
+            BudgetComputing.ArtifactBudget budget = BudgetComputing.computeArtifactBudget(arts, CAP);
+            assertTrue(budget.totalArtifactChars() <= MAX_ART,
+                    "totalArtifactChars must be <= " + MAX_ART + ", was " + budget.totalArtifactChars());
+            assertTrue(budget.ragChars() >= MIN_RAG,
+                    "ragChars must be >= " + MIN_RAG + ", was " + budget.ragChars());
+            assertTrue(budget.ragChars() <= MAX_RAG,
+                    "ragChars must be <= " + MAX_RAG + ", was " + budget.ragChars());
+            assertTrue(budget.totalArtifactChars() + budget.ragChars() <= MAX_ART + MAX_RAG,
+                    "totalArtifactChars + ragChars must be <= " + (MAX_ART + MAX_RAG) + ", was "
                             + (budget.totalArtifactChars() + budget.ragChars()));
         }
     }
 
     // -----------------------------------------------------------------------
-    // Test 6: HistoryService FIFO eviction keeps last 5
+    // Test 6: HistoryService FIFO eviction keeps last 15 turns + breadcrumbs for evicted
     // -----------------------------------------------------------------------
 
     @Test
-    void historyService_fifoEviction_keepsLast5() {
+    void historyService_fifoEviction_keepsLast15Turns_andBreadcrumbsEvicted() {
         HistoryService hs = new HistoryService();
         String convId = "test-conv";
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < 17; i++) {
             hs.addArtifacts(convId, List.of(artifact(100, "content-" + i)));
         }
-        List<HistoryService.BankedArtifact> bank = hs.getBankedArtifacts(convId);
-        assertEquals(5, bank.size(), "Bank should hold exactly 5 entries after 7 additions");
+        List<HistoryService.BankedTurn> bank = hs.getBankedTurns(convId);
+        assertEquals(15, bank.size(), "Bank should hold exactly 15 turns after 17 additions");
         // Oldest surviving turn is 3 (turns 1 and 2 were evicted)
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 15; i++) {
             assertEquals(3 + i, bank.get(i).turnNumber(),
                     "Expected turn " + (3 + i) + " at position " + i);
         }
+        // Evicted turns 1 and 2 kept as breadcrumbs
+        List<String> evicted = hs.getEvictedTurnLabels(convId);
+        assertEquals(2, evicted.size());
+        assertTrue(evicted.get(0).startsWith("turn 1:"), "First breadcrumb should be turn 1");
     }
 
     // -----------------------------------------------------------------------
-    // Test 7: getBankedArtifactsBefore filters by turn correctly
+    // Test 7: getBankedTurnsBefore filters by turn correctly
     // -----------------------------------------------------------------------
 
     @Test
-    void historyService_getBankedArtifactsBefore_filtersCorrectly() {
+    void historyService_getBankedTurnsBefore_filtersCorrectly() {
         HistoryService hs = new HistoryService();
         String convId = "test-conv";
         long t1 = hs.addArtifacts(convId, List.of(artifact(50, "alpha")));
         long t2 = hs.addArtifacts(convId, List.of(artifact(50, "beta")));
         long t3 = hs.addArtifacts(convId, List.of(artifact(50, "gamma")));
 
-        List<HistoryService.BankedArtifact> beforeT3 = hs.getBankedArtifactsBefore(convId, t3);
-        assertEquals(2, beforeT3.size(), "Should return entries from t1 and t2 only");
+        List<HistoryService.BankedTurn> beforeT3 = hs.getBankedTurnsBefore(convId, t3);
+        assertEquals(2, beforeT3.size(), "Should return turns t1 and t2 only");
         assertEquals(t1, beforeT3.get(0).turnNumber());
         assertEquals(t2, beforeT3.get(1).turnNumber());
 
         // Asking before t1 should return nothing
-        List<HistoryService.BankedArtifact> beforeT1 = hs.getBankedArtifactsBefore(convId, t1);
-        assertTrue(beforeT1.isEmpty(), "Nothing should precede t1");
+        assertTrue(hs.getBankedTurnsBefore(convId, t1).isEmpty(), "Nothing should precede t1");
     }
 
     // -----------------------------------------------------------------------
-    // Test 8: summary truncated at 1500 chars with correct suffix
+    // Test 8: full content stored; renderBank keeps it full on big budget, degrades on tiny
     // -----------------------------------------------------------------------
 
-    @Test
-    void bankedArtifact_summaryCappedAt1500WithTruncationSuffix() {
-        HistoryService hs = new HistoryService();
-        String convId = "test-conv";
-        String longContent = "A".repeat(3000);
-        long turn = hs.addArtifacts(convId, List.of(artifact(3000, longContent)));
+    // -----------------------------------------------------------------------
+    // Test 9: renderBank keeps the NEWEST turn full when budget is tight (recency)
+    // -----------------------------------------------------------------------
 
-        List<HistoryService.BankedArtifact> bank = hs.getBankedArtifacts(convId);
-        assertEquals(1, bank.size());
-        String summary = bank.get(0).summary();
-        assertTrue(summary.startsWith("A".repeat(1500)),
-                "Summary should start with first 1500 chars of content");
-        assertTrue(summary.contains("...[truncated, full version was in turn " + turn + "]"),
-                "Summary should contain truncation notice with correct turn number");
-    }
 
     // -----------------------------------------------------------------------
     // Helpers

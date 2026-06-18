@@ -62,6 +62,15 @@ public class MetricsCollector {
     /** Approximate count of requests where total prompt chars > numCtx * 4. */
     private final AtomicLong numCtxOverflowsApprox = new AtomicLong();
 
+    // Ground-truth token usage reported by Ollama (prompt_eval_count / eval_count).
+    private final AtomicLong lastPromptTokens   = new AtomicLong();
+    private final AtomicLong lastEvalTokens      = new AtomicLong();
+    private final AtomicLong maxPromptTokens      = new AtomicLong();
+    private final AtomicLong tokenSamples         = new AtomicLong();
+    private final AtomicLong sumPromptTokens       = new AtomicLong();
+    /** Count of requests where measured prompt+eval tokens reached/exceeded num_ctx. */
+    private final AtomicLong numCtxOverflowsReal   = new AtomicLong();
+
     // =========================================================================
     // Retrieval engine comparison (lucene vs elastic)
     // =========================================================================
@@ -159,6 +168,22 @@ public class MetricsCollector {
     }
 
     /**
+     * Records ground-truth token usage reported by Ollama (prompt_eval_count / eval_count).
+     * This is the real measurement that replaces the chars*4 estimate: if prompt+eval reaches
+     * num_ctx, the window genuinely overflowed and Ollama truncated the prompt.
+     */
+    public void recordTokenUsage(int promptTokens, int evalTokens, int numCtx) {
+        lastPromptTokens.set(promptTokens);
+        lastEvalTokens.set(evalTokens);
+        maxPromptTokens.accumulateAndGet(promptTokens, Math::max);
+        sumPromptTokens.addAndGet(promptTokens);
+        tokenSamples.incrementAndGet();
+        if (promptTokens + evalTokens >= numCtx) {
+            numCtxOverflowsReal.incrementAndGet();
+        }
+    }
+
+    /**
      * Called after each retrieval search to track latency and hit-rate per engine.
      *
      * @param engine one of {@code "lucene"} or {@code "elastic"}
@@ -226,6 +251,14 @@ public class MetricsCollector {
 
         // --- raw counters: context ---
         m.put("numCtxOverflowsApprox", numCtxOverflowsApprox.get());
+
+        // --- measured token usage (ground truth from Ollama) ---
+        m.put("lastPromptTokens",    lastPromptTokens.get());
+        m.put("lastEvalTokens",      lastEvalTokens.get());
+        m.put("maxPromptTokens",     maxPromptTokens.get());
+        m.put("numCtxOverflowsReal", numCtxOverflowsReal.get());
+        long ts = tokenSamples.get();
+        m.put("avgPromptTokens", ts == 0 ? 0 : sumPromptTokens.get() / ts);
 
         // --- raw counters: cleanup ---
         m.put("cleanupRunsTotal",      cleanupRunsTotal.get());
@@ -297,6 +330,12 @@ public class MetricsCollector {
         similarCasesHits.set(0);
         embeddingFailures.set(0);
         numCtxOverflowsApprox.set(0);
+        lastPromptTokens.set(0);
+        lastEvalTokens.set(0);
+        maxPromptTokens.set(0);
+        tokenSamples.set(0);
+        sumPromptTokens.set(0);
+        numCtxOverflowsReal.set(0);
         cleanupRunsTotal.set(0);
         cleanupPagesDeleted.set(0);
         cleanupLastDurationMs.set(0);

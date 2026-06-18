@@ -38,8 +38,18 @@ public class OllamaClient {
     private final Duration timeout;
 
     // Field-injected so the 4-param constructor stays compatible with existing tests.
-    @Value("${ollama.num-ctx:8192}")
-    private int numCtx;
+    // volatile + setter so it can be switched at runtime (e.g. 16384 <-> 32768) for benchmarking
+    // without a restart. All prompt budgets in AiEngine derive from this value at request time.
+    @Value("${ollama.num-ctx:32768}")
+    private volatile int numCtx;
+
+    // Tokens reserved for the generated answer, as a FRACTION of num_ctx so the answer room
+    // scales with the window (a fixed reserve was ~12% at 16384 but only ~6% at 32768).
+    @Value("${ollama.output-reserve-fraction:0.15}")
+    private double outputReserveFraction;
+
+    @Value("${ollama.chars-per-token:3.0}")
+    private double charsPerToken;
 
     // Spring injects its shared ObjectMapper if available; falls back to a local instance otherwise.
     @Autowired(required = false)
@@ -73,6 +83,39 @@ public class OllamaClient {
     /** Exposes the configured context window so callers can detect prompt overflows. */
     public int getNumCtx() {
         return numCtx;
+    }
+
+    /**
+     * Switches the context window at runtime (clamped to a sane range). Used for benchmarking
+     * 16384 vs 32768 without a restart; all AiEngine budgets follow this value automatically.
+     */
+    public void setNumCtx(int value) {
+        int clamped = Math.max(1024, Math.min(131072, value));
+        logger.warn("num_ctx switched at runtime: {} -> {}", numCtx, clamped);
+        this.numCtx = clamped;
+    }
+
+    /** Output reserve in TOKENS, derived from num_ctx and the reserve fraction. */
+    public int getOutputTokenReserve() {
+        return (int) (numCtx * outputReserveFraction);
+    }
+
+    public double getOutputReserveFraction() {
+        return outputReserveFraction;
+    }
+
+    public double getCharsPerToken() {
+        return charsPerToken;
+    }
+
+    /**
+     * Char capacity available for the INPUT prompt: (num_ctx − output reserve) × chars/token.
+     * The output reserve scales with num_ctx (outputReserveFraction). This is the single source
+     * of truth from which all prompt sub-budgets are derived.
+     */
+    public int budgetInputChars() {
+        int inputTokens = Math.max(1024, numCtx - getOutputTokenReserve());
+        return (int) (inputTokens * charsPerToken);
     }
 
     /**
@@ -162,14 +205,16 @@ public class OllamaClient {
                 "stream",   false,
                 "options",  Map.of("temperature", temperature, "num_ctx", numCtx));
 
-        try {
-            List<Map<String, String>> logMessages = messages.stream()
-                    .map(m -> Map.of(
-                            "role",    m.getOrDefault("role", "unknown"),
-                            "content", truncate(m.getOrDefault("content", ""), 100)))
-                    .toList();
-            logger.info("Request: model={} messages={}", model, logMessages);
-        } catch (Exception ignored) {
+        if (logger.isDebugEnabled()) {
+            try {
+                List<Map<String, String>> logMessages = messages.stream()
+                        .map(m -> Map.of(
+                                "role",    m.getOrDefault("role", "unknown"),
+                                "content", truncate(m.getOrDefault("content", ""), 100)))
+                        .toList();
+                logger.debug("Request: model={} messages={}", model, logMessages);
+            } catch (Exception ignored) {
+            }
         }
 
         long ollamaStart = System.currentTimeMillis();
@@ -190,6 +235,7 @@ public class OllamaClient {
         if (resp == null || resp.message == null) {
             return null;
         }
+        recordTokenUsage(resp);
         return resp.message.content;
     }
 
@@ -229,7 +275,11 @@ public class OllamaClient {
                 .flatMap(line -> {
                     try {
                         OllamaNativeResponse resp = om.readValue(line, OllamaNativeResponse.class);
-                        if (resp.done || resp.message == null || resp.message.content == null
+                        if (resp.done) {
+                            recordTokenUsage(resp); // terminal object carries the token counts
+                            return Flux.empty();
+                        }
+                        if (resp.message == null || resp.message.content == null
                                 || resp.message.content.isEmpty()) {
                             return Flux.empty();
                         }
@@ -251,9 +301,15 @@ public class OllamaClient {
     // Response model (Ollama native /api/chat format)
     // -------------------------------------------------------------------------
 
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
     public static class OllamaNativeResponse {
         public OllamaMessage message;
         public boolean done;
+        // Present on the terminal done:true object — the ground-truth token counts.
+        @com.fasterxml.jackson.annotation.JsonProperty("prompt_eval_count")
+        public Integer promptEvalCount;
+        @com.fasterxml.jackson.annotation.JsonProperty("eval_count")
+        public Integer evalCount;
     }
 
     public static class OllamaMessage {
@@ -268,5 +324,21 @@ public class OllamaClient {
     private String truncate(String s, int max) {
         if (s == null) return "";
         return s.length() <= max ? s : s.substring(0, max) + "...";
+    }
+
+    /**
+     * Logs and records the ground-truth token usage reported by Ollama on the done object.
+     * prompt_eval_count = input tokens, eval_count = generated tokens. Their sum vs num_ctx
+     * is the real overflow check (replaces the chars*4 heuristic).
+     */
+    private void recordTokenUsage(OllamaNativeResponse resp) {
+        if (resp == null || resp.promptEvalCount == null) return;
+        int promptTokens = resp.promptEvalCount;
+        int evalTokens = resp.evalCount != null ? resp.evalCount : 0;
+        logger.info("Ollama tokens: prompt={} eval={} total={} / num_ctx={}",
+                promptTokens, evalTokens, promptTokens + evalTokens, numCtx);
+        if (metricsCollector != null) {
+            metricsCollector.recordTokenUsage(promptTokens, evalTokens, numCtx);
+        }
     }
 }

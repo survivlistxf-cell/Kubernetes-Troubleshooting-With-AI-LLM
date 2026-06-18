@@ -15,7 +15,9 @@ spec:
       containers:
         - name: backend
           image: axiiiiiiii/proiect_licenta-backend:latest
-          imagePullPolicy: IfNotPresent
+          # Always: la fiecare rollout trage :latest proaspat din DockerHub
+          # (altfel nodul foloseste imaginea veche din cache).
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
               name: http

@@ -22,6 +22,7 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -29,7 +30,8 @@ import java.util.stream.Collectors;
 
 /**
  * ElasticSearch-backed {@link ChunkRetriever} that performs <em>hybrid BM25+kNN</em>
- * retrieval using ES 8.9+ Reciprocal Rank Fusion (RRF).
+ * retrieval, fusing the two result lists with application-side Reciprocal Rank Fusion
+ * (RRF) so it runs on the free Basic license (the native {@code rrf} retriever is Platinum).
  *
  * <h3>Index mapping</h3>
  * <pre>
@@ -44,7 +46,8 @@ import java.util.stream.Collectors;
  * <h3>Query strategy</h3>
  * <ul>
  *   <li>If an embedding is available for the query text: hybrid BM25 {@code match}
- *       query + {@code knn} with {@code rank.rrf} fusion.</li>
+ *       query + {@code knn}, run as two separate searches and fused in application
+ *       code via Reciprocal Rank Fusion (works on the free Basic license).</li>
  *   <li>If the Ollama embedding model is unavailable: BM25-only {@code match}.</li>
  * </ul>
  *
@@ -64,8 +67,13 @@ public class ElasticChunkRetriever implements ChunkRetriever {
     @Value("${kdiag.elastic.index:kdiag-chunks}")
     private String indexName;
 
-    @Value("${kdiag.elastic.topk:12}")
+    @Value("${kdiag.retrieval.topk:12}")
     private int defaultTopK;
+
+    /** RRF rank constant (k); 60 is the standard default also used by Elasticsearch's native rrf. */
+    private static final int RRF_K = 60;
+    /** Per-list rank window: how many hits to pull from each of the BM25 and kNN lists before fusing. */
+    private static final int RRF_WINDOW = 50;
 
     private volatile Instant lastRebuild;
 
@@ -326,44 +334,49 @@ public class ElasticChunkRetriever implements ChunkRetriever {
             float[] embedding  = embeddingClient != null ? embeddingClient.embed(queryText) : null;
             List<Float> embList = embedding != null ? toFloatList(embedding) : null;
 
-            SearchResponse<ObjectNode> response;
             if (embList != null) {
-                // Hybrid BM25 + kNN with RRF fusion (ES 8.9+)
+                // Hybrid BM25 + kNN combined with Reciprocal Rank Fusion (RRF) computed in
+                // application code. The native ES `rrf` retriever requires a Platinum/Enterprise
+                // license and is rejected on the free Basic license (security_exception). Running
+                // the two queries separately and fusing their ranks here (score = Σ 1/(RRF_K + rank))
+                // keeps hybrid retrieval working without any paid license.
+                final int window = Math.max(topK, RRF_WINDOW);
                 final List<Float> embListFinal = embList;
-                response = esClient.search(s -> s
+
+                SearchResponse<ObjectNode> bm25 = esClient.search(s -> s
                         .index(indexName)
-                        .size(topK)
-                        .query(q -> q.match(m -> m.field("chunkText").query(queryText)))
-                        .knn(k -> k
-                                .field("embedding")
-                                .queryVector(embListFinal)
-                                .k((long) topK)
-                                .numCandidates((long) Math.max(topK * 10, 100))
-                        )
-                        .rank(r -> r.rrf(rrf -> rrf)),
-                        ObjectNode.class
-                );
-            } else {
-                // BM25-only (Ollama embedding unavailable)
-                response = esClient.search(s -> s
-                        .index(indexName)
-                        .size(topK)
+                        .size(window)
                         .query(q -> q.match(m -> m.field("chunkText").query(queryText))),
                         ObjectNode.class
                 );
+
+                SearchResponse<ObjectNode> knn = esClient.search(s -> s
+                        .index(indexName)
+                        .size(window)
+                        .knn(k -> k
+                                .field("embedding")
+                                .queryVector(embListFinal)
+                                .k((long) window)
+                                .numCandidates((long) Math.max(window * 10, 100))
+                        ),
+                        ObjectNode.class
+                );
+
+                return fuseRrf(List.of(bm25, knn), topK);
             }
+
+            // BM25-only (Ollama embedding unavailable)
+            SearchResponse<ObjectNode> response = esClient.search(s -> s
+                    .index(indexName)
+                    .size(topK)
+                    .query(q -> q.match(m -> m.field("chunkText").query(queryText))),
+                    ObjectNode.class
+            );
 
             List<ScoredChunk> results = new ArrayList<>();
             for (Hit<ObjectNode> hit : response.hits().hits()) {
-                ObjectNode src = hit.source();
-                if (src == null) continue;
-                DocChunk chunk = new DocChunk(
-                        src.path("pageId").asLong(-1L),
-                        src.path("url").asText(""),
-                        src.path("title").asText(""),
-                        src.path("chunkIdx").asInt(0),
-                        src.path("chunkText").asText("")
-                );
+                DocChunk chunk = toChunk(hit.source());
+                if (chunk == null) continue;
                 double score = hit.score() != null ? hit.score() : 0.0;
                 results.add(new ScoredChunk(chunk, (float) score));
             }
@@ -372,6 +385,45 @@ public class ElasticChunkRetriever implements ChunkRetriever {
             logger.warn("ES search failed for '{}': {}", queryText, e.getMessage());
             return List.of();
         }
+    }
+
+    /**
+     * Fuses several ranked result lists into one using Reciprocal Rank Fusion: for each
+     * document, {@code score = Σ 1 / (RRF_K + rank)} over the lists in which it appears
+     * (rank is 1-based). Documents are de-duplicated by their Elasticsearch {@code _id}.
+     */
+    private List<ScoredChunk> fuseRrf(List<SearchResponse<ObjectNode>> responses, int topK) {
+        Map<String, Double> fusedScore = new HashMap<>();
+        Map<String, DocChunk> byId = new HashMap<>();
+        for (SearchResponse<ObjectNode> resp : responses) {
+            int rank = 0;
+            for (Hit<ObjectNode> hit : resp.hits().hits()) {
+                rank++;
+                String id = hit.id();
+                if (id == null) continue;
+                DocChunk chunk = toChunk(hit.source());
+                if (chunk == null) continue;
+                fusedScore.merge(id, 1.0 / (RRF_K + rank), Double::sum);
+                byId.putIfAbsent(id, chunk);
+            }
+        }
+        return fusedScore.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .limit(topK)
+                .map(e -> new ScoredChunk(byId.get(e.getKey()), e.getValue().floatValue()))
+                .collect(Collectors.toList());
+    }
+
+    /** Maps an ES hit source document to a {@link DocChunk}, or {@code null} if absent. */
+    private DocChunk toChunk(ObjectNode src) {
+        if (src == null) return null;
+        return new DocChunk(
+                src.path("pageId").asLong(-1L),
+                src.path("url").asText(""),
+                src.path("title").asText(""),
+                src.path("chunkIdx").asInt(0),
+                src.path("chunkText").asText("")
+        );
     }
 
     private List<DocChunk> searchInternal(String queryText, int topK) {

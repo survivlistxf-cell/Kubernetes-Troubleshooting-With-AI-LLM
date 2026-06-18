@@ -66,6 +66,12 @@
         </dependency>
 
         <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
             <version>1.17.2</version>
@@ -144,6 +150,21 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>${java.version}</release>
+                    <!-- Retain method parameter names in the bytecode so Spring MVC can bind
+                         @PathVariable / @RequestParam without explicit names. This project uses
+                         the spring-boot-dependencies BOM (not spring-boot-starter-parent), so the
+                         -parameters flag is NOT enabled by default; without it, endpoints like
+                         /history/{conversationId}/feedback fail at runtime with
+                         "Name for argument of type [java.lang.String] not specified". -->
+                    <parameters>true</parameters>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>

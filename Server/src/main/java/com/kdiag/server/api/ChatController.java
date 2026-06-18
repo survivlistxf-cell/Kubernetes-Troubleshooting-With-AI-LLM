@@ -128,8 +128,14 @@ public class ChatController {
 
         String userText = req.getMessage() == null ? null : req.getMessage().getText();
         List<KdiagModels.Artifact> artifacts = req.getArtifacts();
+        boolean recordExchange = !Boolean.FALSE.equals(req.getRecordExchange());
+        // When ephemeral=true (e.g. title generation from backend/ChatService), pass null
+        // conversationId so nothing is persisted to history.
+        boolean isEphemeral = Boolean.TRUE.equals(req.getEphemeral());
 
-        AiResult result = aiEngine.solve(conversationId, userText, artifacts);
+        AiResult result = isEphemeral
+            ? aiEngine.generateTitle(userText)
+            : aiEngine.solve(conversationId, userText, artifacts, recordExchange);
 
         KdiagChatResponse resp = new KdiagChatResponse();
         resp.setProtocol_version("kdiag/1.0");
@@ -174,6 +180,10 @@ public class ChatController {
 
         String userText = req.getMessage() == null ? null : req.getMessage().getText();
         List<KdiagModels.Artifact> artifacts = req.getArtifacts();
+        boolean recordExchange = !Boolean.FALSE.equals(req.getRecordExchange());
+        // When ephemeral=true (e.g. title generation from backend/ChatService), pass null
+        // conversationId so nothing is persisted to history.
+        boolean isEphemeral = Boolean.TRUE.equals(req.getEphemeral());
 
         logger.info("SSE stream request: conv={} text={}", convId,
                 userText == null ? "<null>" : userText.substring(0, Math.min(80, userText.length())));
@@ -189,7 +199,20 @@ public class ChatController {
                 .build();
 
         final JsonStringEncoder jsonEnc = JsonStringEncoder.getInstance();
-        Flux<ServerSentEvent<String>> tokenStream = aiEngine.solveStream(convId, userText, artifacts)
+
+        // Short-circuit for ephemeral requests (title generation): skip the full streaming
+        // pipeline entirely — no RAG, CBR, history, embeddings. Return as a single chunk.
+        if (isEphemeral) {
+            AiResult titleResult = aiEngine.generateTitle(userText);
+            String text = titleResult.getAssistantText() != null ? titleResult.getAssistantText() : "";
+            String titlePayload = "{\"text\":\"" + new String(jsonEnc.quoteAsString(text)) + "\"}";
+            return Flux.concat(
+                    Flux.just(metaEvent),
+                    Flux.just(ServerSentEvent.<String>builder().event("chunk").data(titlePayload).build()),
+                    Flux.just(doneEvent));
+        }
+
+        Flux<ServerSentEvent<String>> tokenStream = aiEngine.solveStream(convId, userText, artifacts, recordExchange)
                 .flatMap(chunk -> {
                     try {
                         if (chunk.type() == StreamChunk.Type.TOKEN) {

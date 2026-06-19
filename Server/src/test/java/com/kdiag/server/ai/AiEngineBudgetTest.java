@@ -34,7 +34,7 @@ class AiEngineBudgetTest {
     @BeforeEach
     void setUp() {
         // computeArtifactBudget(artifacts, inputChars) uses no injected fields — null deps are safe
-        engine = new AiEngine(null, null, null, null, null, null, null, null);
+        engine = new AiEngine(null, null, null, null, null, null, null);
     }
 
     // -----------------------------------------------------------------------

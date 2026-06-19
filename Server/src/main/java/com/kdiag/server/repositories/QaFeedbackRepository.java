@@ -11,6 +11,15 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Optional;
 
+/*     Acest repository se populeaza la fiecare schimb Q&A cu raspunsul AI-ului si
+       poate contine referinta la URL-ul consultat de AI, embedding se calculeaza
+       doar daca feedback >= 1
+       Se foloseste pentru a intoarce Similar Cases cu embedding pe intrebarea 
+       user-ului, iar cand se trimite prompt-ul catre AI, se introduce in prompt si
+       
+       Previously succesful answers, intorcandu-se raspunsurile trecute ale AI-ului
+*/
+
 @Repository
 public interface QaFeedbackRepository extends JpaRepository<QaFeedback, Long> {
 
@@ -67,6 +76,7 @@ public interface QaFeedbackRepository extends JpaRepository<QaFeedback, Long> {
      * <p>Each element of the returned {@code Object[]} contains the columns in
      * SELECT order: id, conversation_id, user_question, ai_response, emb_text,
      * feedback, source_urls, created_at, distance.
+     * 
      */
     @Query(value = "SELECT id, conversation_id, user_question, ai_response, " +
                    "CAST(embedding AS text) AS emb_text, feedback, source_urls, created_at, " +

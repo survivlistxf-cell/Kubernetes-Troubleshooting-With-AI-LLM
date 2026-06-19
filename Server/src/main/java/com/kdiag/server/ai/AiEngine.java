@@ -1,25 +1,15 @@
 package com.kdiag.server.ai;
 
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
-import java.time.LocalDateTime;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.SignalType;
-import java.util.concurrent.atomic.AtomicReference;
 
 import com.kdiag.server.ai.feedback.FeedbackRetrievalService;
-import com.kdiag.server.ai.helpers.ArtifactProcessing;
-import com.kdiag.server.ai.helpers.BudgetComputing;
 import com.kdiag.server.ai.helpers.ConversationSummaryService;
 import com.kdiag.server.ai.helpers.NeedsSearchLoopService;
 import com.kdiag.server.ai.helpers.PromptsBuilder;
@@ -27,7 +17,6 @@ import com.kdiag.server.ai.helpers.SolveService;
 import com.kdiag.server.ai.helpers.SolveService.ArtifactBankRecord;
 import com.kdiag.server.ai.helpers.SolveService.ArtifactProcessingRecord;
 import com.kdiag.server.ai.helpers.SolveService.FullMessageRecord;
-import com.kdiag.server.ai.history.HistoryService;
 import com.kdiag.server.ai.stream.StreamChunk;
 import com.kdiag.server.docs.KubernetesDocsScraper;
 import com.kdiag.server.docs.KubernetesDynamicSearcher;
@@ -45,19 +34,15 @@ import com.kdiag.server.protocol.KdiagModels.Artifact;
 public class AiEngine {
 
     private static final Logger logger = LoggerFactory.getLogger(AiEngine.class);
-    private static final int MAX_RECENT_HISTORY_MESSAGES     = 12;
 
     private final OllamaClient ollama;
     private final KubernetesDocsScraper docsScraper;
-    private final HistoryService historyService;
     private final FeedbackRetrievalService feedbackRetrievalService;
     private final MetricsCollector metrics;
     private final NeedsSearchLoopService needsSearchLoopService;
-    private final ConversationSummaryService conversationSummary;
     private final SolveService solveService;
 
     public AiEngine(OllamaClient ollama, KubernetesDocsScraper docsScraper,
-            HistoryService historyService,
             FeedbackRetrievalService feedbackRetrievalService,
             MetricsCollector metrics,
             NeedsSearchLoopService needsSearchLoopService,
@@ -65,11 +50,9 @@ public class AiEngine {
             SolveService solveService) {
         this.ollama = ollama;
         this.docsScraper = docsScraper;
-        this.historyService = historyService;
         this.feedbackRetrievalService = feedbackRetrievalService;
         this.metrics = metrics;
         this.needsSearchLoopService = needsSearchLoopService;
-        this.conversationSummary = conversationSummary;
         this.solveService = solveService;
     }
 

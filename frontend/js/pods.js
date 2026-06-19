@@ -639,8 +639,8 @@ export function initPodsScanner() {
 
     if (details) {
       if (details.describe) text += `\n--- kubectl describe ---\n${details.describe}\n`;
-      const podJson = details?.podJson || details?.pod_json || null;
-      if (podJson) text += `\n--- kubectl get pod -o json ---\n${prettyJson(podJson)}\n`;
+      // JSON intentionally excluded from LLM context (redundant with describe, far more tokens).
+      // The JSON viewer tab in the modal stays available for manual inspection only.
       if (details.events) text += `\n--- Events ---\n${details.events}\n`;
       if (details.logs) text += `\n--- Logs (tail 200) ---\n${details.logs}\n`;
     }
@@ -680,9 +680,7 @@ export function initPodsScanner() {
 
           detailsResults.forEach(res => {
             if (res.ok) {
-              const payloadKey = res.lvl === 'json' ? 'podJson' : res.lvl;
-              let content = res.data[payloadKey];
-              if (res.lvl === 'json') content = prettyJson(content);
+              const content = res.data[res.lvl];
               aggregatedContext += `[${res.lvl.toUpperCase()}]\n${content}\n`;
             } else {
               aggregatedContext += `[${res.lvl.toUpperCase()}] ERROR: Failed to fetch\n`;

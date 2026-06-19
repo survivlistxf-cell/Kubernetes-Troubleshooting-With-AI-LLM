@@ -164,7 +164,7 @@ public class KubernetesDocsScraper {
      * Returns an empty string if the index returns no results; caller should
      * fall back to {@link #getRelevantDocs(String)}.
      */
-    public String getRelevantDocsByBm25(String userMessage, int maxContextChars) {
+    public String getRelevantDocsHybrid(String userMessage, int maxContextChars) {
         List<DocChunk> chunks = chunkRetriever.search(userMessage, retrievalTopK);
         if (chunks.isEmpty()) return "";
         return assembleContext(chunks, maxContextChars);
@@ -179,7 +179,7 @@ public class KubernetesDocsScraper {
      * <p>Returns an empty string when the index has no matching chunks; caller
      * should fall back to {@link #getRelevantDocs(String)}.
      */
-    public String getRelevantDocsByBm25Boosted(String userMessage, int maxContextChars,
+    public String getRelevantDocsHybridBoosted(String userMessage, int maxContextChars,
                                                Set<String> boostedUrls) {
         List<DocChunk> chunks = chunkRetriever.search(userMessage, retrievalTopK, boostedUrls);
         if (chunks.isEmpty()) return "";

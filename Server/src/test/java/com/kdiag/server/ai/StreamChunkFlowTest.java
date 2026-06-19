@@ -71,12 +71,12 @@ class StreamChunkFlowTest {
     @BeforeEach
     void setUp() {
         aiEngine = new AiEngine(ollamaClient, docsScraper,
-                historyService, feedbackRetrievalService, metrics, needsSearchLoop, conversationSummary, solveService);
+                 feedbackRetrievalService, metrics, needsSearchLoop, conversationSummary, solveService);
 
         // Common stubs required by solveStream's synchronous setup phase.
         when(ollamaClient.getNumCtx()).thenReturn(4096);
         when(ollamaClient.budgetInputChars()).thenReturn(12000); // budgets derive from this now
-        when(docsScraper.getRelevantDocsByBm25Boosted(any(), anyInt(), any())).thenReturn("");
+        when(docsScraper.getRelevantDocsHybridBoosted(any(), anyInt(), any())).thenReturn("");
         when(docsScraper.getRelevantDocs(any())).thenReturn("");
         when(feedbackRetrievalService.getBoostedUrls()).thenReturn(Set.of());
         when(feedbackRetrievalService.findSimilarCases(any())).thenReturn(List.of());

@@ -12,22 +12,20 @@ public class ArtifactProcessing {
     // Per-section size caps, applied at parse time so a single pod dump is reduced to its
     // high-signal sections BEFORE computeArtifactBudget. Expressed as FRACTIONS of the live
     // input capacity (budgetInputChars, derived from num_ctx) so they scale when num_ctx is
-    // switched. JSON is mostly redundant with DESCRIBE → smallest slice (also no longer sent).
+    // switched. JSON is never sent (redundant with DESCRIBE, far more tokens), so it is not parsed.
     private static final double DESCRIBE_CAP_FRACTION = 0.10;
     private static final double LOGS_CAP_FRACTION     = 0.10;
     private static final double EVENTS_CAP_FRACTION   = 0.06;
-    private static final double JSON_CAP_FRACTION     = 0.035;
 
     private static int capDescribe(int budgetInputChars) { return (int) (budgetInputChars* DESCRIBE_CAP_FRACTION); }
     private static int capLogs(int budgetInputChars)     { return (int) (budgetInputChars * LOGS_CAP_FRACTION); }
     private static int capEvents(int budgetInputChars)   { return (int) (budgetInputChars * EVENTS_CAP_FRACTION); }
-    private static int capJson(int budgetInputChars)     { return (int) (budgetInputChars * JSON_CAP_FRACTION); }
 
-    // "--- POD: <ns>/<name> ---" delimits pods; "[DESCRIBE]"/"[JSON]"/... delimit sections.
+    // "--- POD: <ns>/<name> ---" delimits pods; "[DESCRIBE]"/"[EVENTS]"/"[LOGS]" delimit sections.
     private static final java.util.regex.Pattern POD_MARKER =
             java.util.regex.Pattern.compile("(?m)^---\\s*POD:\\s*(.+?)\\s*---\\s*$");
     private static final java.util.regex.Pattern SECTION_MARKER =
-            java.util.regex.Pattern.compile("(?m)^\\[(DESCRIBE|JSON|EVENTS|LOGS)\\]\\s*$");
+            java.util.regex.Pattern.compile("(?m)^\\[(DESCRIBE|EVENTS|LOGS)\\]\\s*$");
 
     public static List<Artifact> processArtifacts(List<Artifact> artifacts, int budgetInputChars) {
         if (artifacts == null)
@@ -110,9 +108,9 @@ public class ArtifactProcessing {
             sections.put(tags.get(i), body.substring(cStart, cEnd).strip());
         }
 
-        // Emit in priority order so FIFO budgeting favors high-signal sections over raw JSON.
+        // Emit in priority order so FIFO budgeting favors the highest-signal sections first.
         boolean statusAttached = false;
-        for (String tag : new String[]{"DESCRIBE", "EVENTS", "LOGS", "JSON"}) {
+        for (String tag : new String[]{"DESCRIBE", "EVENTS", "LOGS"}) {
             String raw = sections.get(tag);
             if (raw == null || raw.isBlank())
                 continue;
@@ -132,7 +130,6 @@ public class ArtifactProcessing {
             case "DESCRIBE": return compressDescribe(s, capDescribe(budgetInputChars)); // diagnostic sections only
             case "LOGS":     return compressLogs(s, capLogs(budgetInputChars));         // errors + stack context only
             case "EVENTS":   return compressEvents(s, capEvents(budgetInputChars));     // Warning events only
-            case "JSON":     return headCap(s, capJson(budgetInputChars));             // JSON no longer sent; defensive
             default:         return compressDescribe(s, capDescribe(budgetInputChars));
         }
     }
@@ -240,7 +237,6 @@ public class ArtifactProcessing {
     private static String typeForTag(String tag) {
         switch (tag) {
             case "DESCRIBE": return "pod_describe";
-            case "JSON":     return "pod_json";
             case "EVENTS":   return "pod_events";
             case "LOGS":     return "pod_logs";
             default:         return "pod_section";

@@ -27,6 +27,21 @@ public class PromptsBuilder {
     // Minimum useful slice of an artifact before we degrade to a filename-only breadcrumb.
     private static final int BANK_SUMMARY_MIN_CHARS = 600;
 
+    // Marker appended to the user message when the artifact budget could not fit all attached
+    // evidence (an artifact was cut to its allocation, or dropped entirely). Signals to the LLM
+    // that the evidence below may be incomplete.
+    private static final String TRUNCATION_TAG =
+        "\n--- TRUNCATED BECAUSE OF LIMITS ---\n";
+
+    // System-prompt note explaining how the LLM should treat the marker above. Always included
+    // (phrased conditionally) so the model knows what the tag means when it appears.
+    private static final String TRUNCATION_NOTICE =
+        "EVIDENCE LIMITS: If you see the marker '--- TRUNCATED BECAUSE OF LIMITS ---' in the user " +
+        "message, the attached evidence (logs/describe/events) was shortened to fit size limits and " +
+        "may be incomplete. Do NOT assume a section is empty or a problem is absent just because a " +
+        "detail is missing; if a decisive detail seems to be missing, say so and ask the user to " +
+        "re-attach or narrow to the specific pod/resource rather than guessing.\n";
+
     /**
      * Builds the system prompt.
      * isFirstTurn=true → full verbose preamble.
@@ -50,11 +65,13 @@ public class PromptsBuilder {
             sb.append("- If user provides error messages or logs: explain what they mean\n");
             sb.append("- Focus on understanding the problem first, not just solutions\n");
             sb.append(NEEDS_SEARCH_CONTRACT);
+            sb.append(TRUNCATION_NOTICE);
             sb.append("\n");
         } else {
             sb.append("You are Kubexplain, the Kubernetes diagnostic assistant. Continue this conversation " +
                 "applying the same conventions established earlier: structure responses in readable markdown.\n\n");
             sb.append(NEEDS_SEARCH_CONTRACT);
+            sb.append(TRUNCATION_NOTICE);
             sb.append("\n");
         }
 
@@ -174,11 +191,18 @@ public class PromptsBuilder {
 
         if (artifacts != null && !artifacts.isEmpty()) {
             StringBuilder artifactSection = new StringBuilder();
+            boolean truncated = false;
             for (int i = 0; i < artifacts.size(); i++) {
                 Artifact a = artifacts.get(i);
                 if (a == null) continue;
                 int alloc = (i < perArtifactChars.length) ? perArtifactChars[i] : 0;
-                if (alloc <= 0) continue; // omit artifacts with zero allocation
+                String content = a.getContent() == null ? "" : a.getContent();
+                if (alloc <= 0) {
+                    // artifact fully dropped because the artifact budget was exhausted
+                    if (!content.isBlank()) truncated = true;
+                    continue;
+                }
+                if (content.length() > alloc) truncated = true; // artifact cut to fit the budget
                 String label = a.getType();
                 if (a.getTarget() != null && !a.getTarget().isBlank()) {
                     label = label + " — " + a.getTarget(); // e.g. "pod_logs — kubexplain/ai-server-..."
@@ -189,6 +213,10 @@ public class PromptsBuilder {
             if (artifactSection.length() > 0) {
                 sb.append("\n--- New evidence provided in this turn ---\n");
                 sb.append(artifactSection);
+            }
+            // Global signal: at least one artifact was cut or dropped by the artifact budget.
+            if (truncated) {
+                sb.append(TRUNCATION_TAG);
             }
         }
 
@@ -218,10 +246,10 @@ public class PromptsBuilder {
                 }
             }
 
-            String bm25Result = docsScraper.getRelevantDocsByBm25Boosted(
+            String hybridSearchResult = docsScraper.getRelevantDocsHybridBoosted(
                     query.toString(), maxRagChars, boostedUrls);
-            if (!bm25Result.isBlank()) {
-                return bm25Result;
+            if (!hybridSearchResult.isBlank()) {
+                return hybridSearchResult;
             }
             return docsScraper.getRelevantDocs(query.toString());
         } catch (Exception e) {

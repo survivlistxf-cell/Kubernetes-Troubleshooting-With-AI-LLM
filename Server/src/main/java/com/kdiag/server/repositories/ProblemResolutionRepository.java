@@ -16,6 +16,10 @@ public interface ProblemResolutionRepository extends JpaRepository<ProblemResolu
      * Returns the raw {@code useful_urls} TEXT values for all resolutions with positive feedback.
      * Each value is a newline-joined list of URLs (see KubernetesDynamicSearcher.searchAndSave).
      * Callers must split on {@code \\R} (any line break).
+     * 
+     * Acest repository se populeaza doar cand se trigger-uieste o cautare dinamica si se aduc in
+     * baza de date niste informatii si este folosita la Hybrid Search-ul (BM25 + kNN) pentru a returna 
+     * boosted_urls la trimiterea prompt-ului catre AI 
      */
     @Query(value = "SELECT useful_urls FROM problem_resolutions " +
                    "WHERE feedback >= 1 AND useful_urls IS NOT NULL",

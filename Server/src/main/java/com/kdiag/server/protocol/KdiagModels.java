@@ -315,7 +315,7 @@ public final class KdiagModels {
          * splits + per-section-caps this down before the prompt budget ever sees it, so the
          * gate just needs to be generous enough not to 400 a legitimate multi-pod attach.
          */
-        @Size(max = 200000)
+        @Size(max = 10000000) // 10 MB limita
         private String content;
 
         /**

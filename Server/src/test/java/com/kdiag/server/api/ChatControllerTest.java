@@ -10,7 +10,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.web.servlet.MockMvc;
 
-import com.kdiag.server.ollama.OllamaClient;
+import com.kdiag.server.llm.GptChatClient;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -26,11 +26,11 @@ class ChatControllerTest {
     static class TestBeans {
         @Bean
         @Primary
-        OllamaClient ollamaClient() {
-      return new OllamaClient("http://localhost:11434", "llama3.1", 0.2, 60L) {
+        GptChatClient gptChatClient() {
+      return new GptChatClient("http://localhost:11434/v1", "openai/gpt-oss-120b", "", 0.2, 60L, 0) {
                 @Override
                 public String chat(java.util.List<java.util.Map<String, String>> messages) {
-                    return "OK_FROM_OLLAMA";
+                    return "OK_FROM_GPT";
                 }
             };
         }
@@ -55,7 +55,7 @@ class ChatControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.protocol_version").value("kdiag/1.0"))
                 .andExpect(jsonPath("$.conversation_id").isNotEmpty())
-                .andExpect(jsonPath("$.assistant_message.text").value("OK_FROM_OLLAMA"));
+                .andExpect(jsonPath("$.assistant_message.text").value("OK_FROM_GPT"));
     }
 
     @Test

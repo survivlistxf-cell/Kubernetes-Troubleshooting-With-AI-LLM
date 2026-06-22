@@ -21,11 +21,11 @@ import com.kdiag.server.ai.stream.StreamChunk;
 import com.kdiag.server.docs.KubernetesDocsScraper;
 import com.kdiag.server.docs.KubernetesDynamicSearcher;
 import com.kdiag.server.metrics.MetricsCollector;
-import com.kdiag.server.ollama.OllamaClient;
+import com.kdiag.server.llm.GptChatClient;
 import com.kdiag.server.protocol.KdiagModels.Artifact;
 
 /**
- * Ollama-backed AI engine.
+ * LLM-backed AI engine (chat via gpt-oss, OpenAI-compatible).
  *
  * Input: user message + optional artifacts.
  * Output: assistant text + optional actions_requested.
@@ -35,20 +35,20 @@ public class AiEngine {
 
     private static final Logger logger = LoggerFactory.getLogger(AiEngine.class);
 
-    private final OllamaClient ollama;
+    private final GptChatClient gpt;
     private final KubernetesDocsScraper docsScraper;
     private final FeedbackRetrievalService feedbackRetrievalService;
     private final MetricsCollector metrics;
     private final NeedsSearchLoopService needsSearchLoopService;
     private final SolveService solveService;
 
-    public AiEngine(OllamaClient ollama, KubernetesDocsScraper docsScraper,
+    public AiEngine(GptChatClient gpt, KubernetesDocsScraper docsScraper,
             FeedbackRetrievalService feedbackRetrievalService,
             MetricsCollector metrics,
             NeedsSearchLoopService needsSearchLoopService,
             ConversationSummaryService conversationSummary,
             SolveService solveService) {
-        this.ollama = ollama;
+        this.gpt = gpt;
         this.docsScraper = docsScraper;
         this.feedbackRetrievalService = feedbackRetrievalService;
         this.metrics = metrics;
@@ -71,7 +71,7 @@ public class AiEngine {
                             + " artifactsSize" + (artifacts != null ? artifacts.size() : 0));
         
         // 1. splitBulkPodContext -> Se ia fiecare artefact in parte si se normalizeaza
-        ArtifactProcessingRecord APR = solveService.artifactProcessing(userText, artifacts, feedbackRetrievalService, ollama);
+        ArtifactProcessingRecord APR = solveService.artifactProcessing(userText, artifacts, feedbackRetrievalService, gpt);
         
         // 2. Fetch relevant docs (boost-aware, dynamic ragChars)
         // Aici se construieste un string cu 12 chunkuri cele mai relevante din ES
@@ -106,10 +106,10 @@ public class AiEngine {
         final int solvePromptChars = FMR.messages().stream()
                 .mapToInt(msg -> msg.getOrDefault("content", "").length())
                 .sum();
-        metrics.recordNumCtxOverflowIfApplicable(solvePromptChars, ollama.getNumCtx());
+        metrics.recordNumCtxOverflowIfApplicable(solvePromptChars, gpt.getNumCtx());
 
-        // Se apeleaza ollama
-        String assistantText = solveService.callOllama(conversationId, FMR.messages(), userText, APR.processedArtifacts(), relevantDocs);
+        // Se apeleaza gpt
+        String assistantText = solveService.callChat(conversationId, FMR.messages(), userText, APR.processedArtifacts(), relevantDocs);
 
         // --- SECONDARY DYNAMIC RAG LOOP ---
         var DRR = needsSearchLoopService.dynamicRagLoopFunction(conversationId, assistantText, FMR.messages());
@@ -130,7 +130,7 @@ public class AiEngine {
         List<Map<String, String>> messages = List.of(
                 Map.of("role", "user", "content", userText == null ? "" : userText));
         try {
-            String raw = ollama.chat(messages);
+            String raw = gpt.chat(messages);
             if (raw == null || raw.isBlank()) return new AiResult("", null);
             return new AiResult(raw.trim(), null);
         } catch (Exception e) {
@@ -172,7 +172,7 @@ public class AiEngine {
                             + " artifactsSize" + (artifacts != null ? artifacts.size() : 0));
         
         // 1. splitBulkPodContext -> Se ia fiecare artefact in parte si se normalizeaza
-        ArtifactProcessingRecord APR = solveService.artifactProcessing(userText, artifacts, feedbackRetrievalService, ollama);
+        ArtifactProcessingRecord APR = solveService.artifactProcessing(userText, artifacts, feedbackRetrievalService, gpt);
         
         // 2. Fetch relevant docs (boost-aware, dynamic ragChars)
         // Aici se construieste un string cu 12 chunkuri cele mai relevante din ES
@@ -207,7 +207,7 @@ public class AiEngine {
         final int solvePromptChars = FMR.messages().stream()
                 .mapToInt(msg -> msg.getOrDefault("content", "").length())
                 .sum();
-        metrics.recordNumCtxOverflowIfApplicable(solvePromptChars, ollama.getNumCtx());
+        metrics.recordNumCtxOverflowIfApplicable(solvePromptChars, gpt.getNumCtx());
 
         // Final function call for streaming
         return solveService.streamFluxFunction(conversationId, userText, 

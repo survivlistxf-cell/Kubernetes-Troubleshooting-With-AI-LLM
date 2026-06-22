@@ -4,6 +4,11 @@ metadata:
   name: postgres
 spec:
   replicas: 1
+  # Single-instance DB on a ReadWriteOnce PVC: the old pod must release the volume before
+  # the new one starts. RollingUpdate would run both pods at once and they would fight over
+  # the RWO volume. Recreate stops the old pod first, then starts the new one.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: postgres
@@ -18,7 +23,7 @@ spec:
           # qa_feedback.embedding column (vector(768)).  See docker-compose.yml
           # and init.sql for the same change in the Compose dev environment.
           image: pgvector/pgvector:pg16
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 5432
               name: postgres
@@ -61,7 +66,14 @@ spec:
             timeoutSeconds: 5
       volumes:
         - name: postgres-data
-          emptyDir: {}
+          # cinder-csi (dynamic) is broken cluster-wide and a `local` PV would force the
+          # pod onto one specific node. hostPath persists data across pod restarts without
+          # a provisioner or PV/PVC, and DirectoryOrCreate makes the dir on first use.
+          # NOTE: data lives on whichever node the pod runs on; if the pod is rescheduled
+          # to a different node it starts from an empty dir. See nodeSelector note below.
+          hostPath:
+            path: /mnt/kubexplain/postgres
+            type: DirectoryOrCreate
         - name: postgres-init-sql
           configMap:
             name: postgres-init-sql

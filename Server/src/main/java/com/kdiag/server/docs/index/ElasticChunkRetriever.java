@@ -10,7 +10,7 @@ import co.elastic.clients.elasticsearch.indices.ExistsRequest;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.kdiag.server.entities.KubernetesDocPage;
 import com.kdiag.server.metrics.MetricsCollector;
-import com.kdiag.server.ollama.OllamaEmbeddingClient;
+import com.kdiag.server.llm.OllamaEmbeddingClient;
 import com.kdiag.server.repositories.KubernetesDocPageRepository;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;

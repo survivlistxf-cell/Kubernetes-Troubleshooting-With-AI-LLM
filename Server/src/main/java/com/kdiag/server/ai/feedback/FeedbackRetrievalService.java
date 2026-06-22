@@ -2,7 +2,7 @@ package com.kdiag.server.ai.feedback;
 
 import com.kdiag.server.entities.QaFeedback;
 import com.kdiag.server.metrics.MetricsCollector;
-import com.kdiag.server.ollama.OllamaEmbeddingClient;
+import com.kdiag.server.llm.OllamaEmbeddingClient;
 import com.kdiag.server.repositories.ProblemResolutionRepository;
 import com.kdiag.server.repositories.QaFeedbackRepository;
 import org.slf4j.Logger;

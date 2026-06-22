@@ -28,12 +28,12 @@ C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\doc
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\entities\KubernetesDocPage.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\entities\ProblemResolution.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\entities\QaFeedback.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\llm\GptChatClient.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\llm\GptStartupCheck.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\llm\OllamaEmbeddingClient.java
+C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\llm\package-info.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\maintenance\DynamicPageCleanupService.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\metrics\MetricsCollector.java
-C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\ollama\OllamaClient.java
-C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\ollama\OllamaEmbeddingClient.java
-C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\ollama\OllamaStartupCheck.java
-C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\ollama\package-info.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\PgVectorExtensionInitializer.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\protocol\KdiagModels.java
 C:\Users\axine\Desktop\Licenta\Proiect\Server\src\main\java\com\kdiag\server\repositories\KubernetesDocPageRepository.java

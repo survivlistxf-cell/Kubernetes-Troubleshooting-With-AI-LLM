@@ -46,7 +46,7 @@ public class AiForwardingService {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         // Connect timeout keeps the request from hanging while establishing the TCP connection.
         factory.setConnectTimeout(CONNECT_TIMEOUT_MS);
-        // Read timeout is slightly above Ollama's own timeout so the backend can surface a clear failure.
+        // Read timeout is slightly above the AI server's own chat timeout so the backend can surface a clear failure.
         factory.setReadTimeout(READ_TIMEOUT_MS);
         this.restTemplate = new RestTemplate(factory);
     }

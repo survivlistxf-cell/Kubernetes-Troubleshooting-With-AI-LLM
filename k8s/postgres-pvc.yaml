@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  # NOTE: cinder-csi dynamic provisioning is broken cluster-wide (controller pods all
+  # Evicted/Unknown, nodeplugin DaemonSet CrashLoopBackOff). This cluster relies on
+  # statically pre-created PVs (storageClass "manuale"), e.g. elearning/pgdata-pvc.
+  # We bind directly to the pre-existing postgres-data-pv-v2 PV instead of provisioning.
+  storageClassName: manuale
+  volumeName: postgres-data-pv-v2
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

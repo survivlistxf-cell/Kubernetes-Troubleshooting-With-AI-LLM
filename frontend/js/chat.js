@@ -6,9 +6,34 @@ import { renderChatAttachmentsHtml, bindChatAttachmentClicks, clearDraftAttachme
 import { loadChatHistoryIntoTab } from './history.js';
 
 // DOM refs (initialized in initChat)
-let promptForm, promptInput, messagesArea;
+let promptForm, promptInput, messagesArea, sendBtn, sendBtnText, sendBtnIcon;
 
 const MAX_MESSAGE_LENGTH = 16000;
+
+// Send/Stop button icons (the markup mirrors the inline SVGs in index.html).
+const SEND_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>';
+const STOP_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+
+/**
+ * Toggle the composer's primary button between "Send" and "Stop" states and keep
+ * state.isStreaming in sync. While streaming the button acts as an abort control
+ * (handled in handleSubmit) instead of submitting a new message.
+ */
+function setStreamingUI(streaming) {
+  state.isStreaming = streaming;
+  if (!sendBtn) return;
+  if (streaming) {
+    sendBtn.classList.add('is-stopping');
+    sendBtn.title = 'Stop generating';
+    if (sendBtnText) sendBtnText.textContent = 'Stop';
+    if (sendBtnIcon) sendBtnIcon.innerHTML = STOP_ICON;
+  } else {
+    sendBtn.classList.remove('is-stopping');
+    sendBtn.title = 'Send (Enter)';
+    if (sendBtnText) sendBtnText.textContent = 'Send';
+    if (sendBtnIcon) sendBtnIcon.innerHTML = SEND_ICON;
+  }
+}
 
 // Set to false to fall back to the non-streaming POST /api/chat endpoint.
 const STREAMING_ENABLED = true;
@@ -43,7 +68,10 @@ function removeTypingIndicator() {
 }
 
 //adauga mesajul userului/AI-ului in messageArea
-export function addMessage(text, sender, score = 0) {
+// respectStick: when true, only auto-scroll if the user is still pinned to the
+// bottom (used when finalizing a streamed answer so we don't yank the view down
+// if the user scrolled up to read earlier text).
+export function addMessage(text, sender, score = 0, { respectStick = false } = {}) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${sender}`;
   // We attach the message ID or conversation ID as needed. For current conv, state provides it.
@@ -86,6 +114,7 @@ export function addMessage(text, sender, score = 0) {
 
   // Asigură scroll la final după ce DOM-ul e updatat
   setTimeout(() => {
+    if (respectStick && !state.stickToBottom) return;
     messagesArea.scrollTop = messagesArea.scrollHeight;
     messageDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, 50);
@@ -347,7 +376,7 @@ function addStatusMessage(code, label) {
     messagesArea.appendChild(statusDiv);
   }
 
-  messagesArea.scrollTop = messagesArea.scrollHeight;
+  if (state.stickToBottom) messagesArea.scrollTop = messagesArea.scrollHeight;
 }
 
 /**
@@ -371,6 +400,7 @@ function createStreamingBubble() {
   messagesArea.appendChild(messageDiv);
 
   setTimeout(() => {
+    if (!state.stickToBottom) return;
     messagesArea.scrollTop = messagesArea.scrollHeight;
     messageDiv.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, 50);
@@ -387,10 +417,18 @@ async function sendMessageStreaming(text, attachments, conversationId) {
   const userId = localStorage.getItem('userId');
   if (userId) payload.userId = userId;
 
+  // One AbortController per send. Aborting it cancels the fetch, which closes the
+  // HTTP response and propagates cancellation through the (fully reactive) backend
+  // chain up to the LLM, stopping generation. handleSubmit calls abort() when the
+  // send button is pressed while streaming.
+  const controller = new AbortController();
+  state.activeStreamController = controller;
+
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    signal: controller.signal,
   });
 
   if (!response.ok || !response.body) {
@@ -405,6 +443,7 @@ async function sendMessageStreaming(text, attachments, conversationId) {
   let fullText = '';    // accumulates all chunk data for final render
   let finalConvId = conversationId;
   let streamDone = false;
+  let aborted = false;  // user pressed Stop mid-stream
 
   try {
     while (!streamDone) {
@@ -467,7 +506,9 @@ async function sendMessageStreaming(text, attachments, conversationId) {
           // stream progresses, instead of waiting for the final replacement bubble.
           contentDiv.innerHTML = renderMarkdown(fullText);
           attachCopyListeners(contentDiv);
-          messagesArea.scrollTop = messagesArea.scrollHeight;
+          // Stick-to-bottom: only auto-follow while the user is parked at the
+          // bottom, so scrolling up to read earlier text isn't fought per token.
+          if (state.stickToBottom) messagesArea.scrollTop = messagesArea.scrollHeight;
 
         } else if (event === 'done') {
           streamDone = true;
@@ -479,6 +520,15 @@ async function sendMessageStreaming(text, attachments, conversationId) {
           break;
         }
       }
+    }
+  } catch (err) {
+    // Stop pressed: the fetch was aborted, so reader.read() rejects with
+    // AbortError. Treat it as a graceful stop (keep partial text) rather than a
+    // failure — genuine errors are re-thrown for handleSubmit to surface.
+    if (err && err.name === 'AbortError') {
+      aborted = true;
+    } else {
+      throw err;
     }
   } finally {
     reader.cancel().catch(() => {});
@@ -493,7 +543,13 @@ async function sendMessageStreaming(text, attachments, conversationId) {
   const streamingBubble = document.getElementById('streaming-bubble');
   if (streamingBubble) streamingBubble.remove();
 
-  addMessage(fullText || "I couldn't process that request.", 'assistant');
+  // On abort keep whatever was already rendered and append a subtle marker.
+  let finalText = fullText;
+  if (aborted) {
+    finalText = fullText ? `${fullText}\n\n*⏹ stopped*` : '*⏹ stopped*';
+  }
+
+  addMessage(finalText || "I couldn't process that request.", 'assistant', 0, { respectStick: true });
   loadChatHistoryIntoTab();
 
   return finalConvId;
@@ -502,6 +558,12 @@ async function sendMessageStreaming(text, attachments, conversationId) {
 // ----- submit handler
 async function handleSubmit(ev) {
   ev.preventDefault();
+
+  // While a response is streaming the send button acts as a Stop button.
+  if (state.isStreaming) {
+    state.activeStreamController?.abort();
+    return;
+  }
 
   const message = promptInput.value.trim();
   const filesSnapshot = state.attachedFiles.slice();
@@ -518,6 +580,9 @@ async function handleSubmit(ev) {
   hideWelcomeHeader();
   autoCollapseSidebar();
 
+  // A new send always re-pins to the bottom so the fresh answer auto-follows.
+  state.stickToBottom = true;
+
   // Render user bubble immediately
   addUserMessageWithAttachments(message || '', filesSnapshot, false);
 
@@ -531,13 +596,19 @@ async function handleSubmit(ev) {
 
   if (STREAMING_ENABLED) {
     // ── Streaming path ──
+    setStreamingUI(true);
     try {
       await sendMessageStreaming(message, payloadAttachments, conversationId);
     } catch (e) {
-      // Remove any half-created streaming bubble and show an error message
+      // Remove any half-created streaming bubble and show an error message.
+      // (A user-pressed Stop is handled inside sendMessageStreaming and never
+      // throws here, so this only fires on genuine stream failures.)
       const bubble = document.getElementById('streaming-bubble');
       if (bubble) bubble.remove();
       addMessage('Error: Could not stream response from server. Make sure the backend is running.', 'assistant');
+    } finally {
+      setStreamingUI(false);
+      state.activeStreamController = null;
     }
   } else {
     // ── Non-streaming (legacy) path ──
@@ -572,6 +643,9 @@ export function initChat() {
   promptForm = document.getElementById('prompt-form');
   promptInput = document.getElementById('prompt-input');
   messagesArea = document.getElementById('messages');
+  sendBtn = promptForm?.querySelector('.composer-send');
+  sendBtnText = sendBtn?.querySelector('.text');
+  sendBtnIcon = sendBtn?.querySelector('.icon');
 
   promptInput?.addEventListener('input', () => {
     promptInput.style.height = 'auto';
@@ -583,8 +657,17 @@ export function initChat() {
   promptInput?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      // Don't let Enter start a second stream while one is already running.
+      if (state.isStreaming) return;
       promptForm.dispatchEvent(new Event('submit'));
     }
+  });
+
+  // Stick-to-bottom tracking: if the user scrolls away from the bottom, pause
+  // auto-follow; when they return to within ~80px of the bottom, resume it.
+  messagesArea?.addEventListener('scroll', () => {
+    const el = messagesArea;
+    state.stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   });
 
   bindChatAttachmentClicks(messagesArea);

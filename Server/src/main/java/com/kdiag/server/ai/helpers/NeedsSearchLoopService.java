@@ -11,7 +11,7 @@ import org.springframework.stereotype.Service;
 import com.kdiag.server.ai.stream.StreamChunk;
 import com.kdiag.server.docs.KubernetesDynamicSearcher;
 import com.kdiag.server.metrics.MetricsCollector;
-import com.kdiag.server.ollama.OllamaClient;
+import com.kdiag.server.llm.GptChatClient;
 
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -26,16 +26,16 @@ public class NeedsSearchLoopService {
     private static final String NEEDS_SEARCH_OPEN  = "[NEEDS_SEARCH:";
     private static final String NEEDS_SEARCH_CLOSE = "]";
 
-    private final OllamaClient ollama;
+    private final GptChatClient gpt;
     private final KubernetesDynamicSearcher dynamicSearcher;
     private final MetricsCollector metrics;
 
     public record DynamicRagResult(String assistantText, List<String> dynamicSourceUrls) {}
     
-    public NeedsSearchLoopService(OllamaClient ollama,
+    public NeedsSearchLoopService(GptChatClient gpt,
                              KubernetesDynamicSearcher dynamicSearcher,
                              MetricsCollector metrics) {
-        this.ollama = ollama;
+        this.gpt = gpt;
         this.dynamicSearcher = dynamicSearcher;
         this.metrics = metrics;
     }
@@ -57,7 +57,7 @@ public class NeedsSearchLoopService {
      *   <li>A marker found after a long partial answer still triggers the search; the
      *       already-flushed prefix stays visible and the second stream's tokens are
      *       appended after it, so the marker text itself is never shown.</li>
-     *   <li>A marker split across two or more Ollama chunks is still detected, because up
+     *   <li>A marker split across two or more streamed chunks is still detected, because up
      *       to {@code NEEDS_SEARCH_OPEN.length() - 1} trailing characters are held back
      *       whenever they could be the start of the marker.</li>
      * </ul>
@@ -184,10 +184,96 @@ public class NeedsSearchLoopService {
         return 0;
     }
 
+    // -------------------------------------------------------------------------
+    // Second-pass guards: after the first search, the model must answer, not search again
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns a copy of {@code messages} with {@link PromptsBuilder#SECOND_PASS_NO_SEARCH} appended to
+     * the system prompt (or prepended as a fresh system message if none exists). The original list is
+     * left untouched. Used for the post-search call so the model answers from the supplied docs rather
+     * than emitting another {@code [NEEDS_SEARCH:]} marker.
+     */
+    private static List<Map<String, String>> withSecondPassSystemDirective(List<Map<String, String>> messages) {
+        List<Map<String, String>> out = new java.util.ArrayList<>(messages.size() + 1);
+        boolean patched = false;
+        for (Map<String, String> m : messages) {
+            if (!patched && "system".equals(m.get("role"))) {
+                out.add(Map.of("role", "system",
+                        "content", m.getOrDefault("content", "") + PromptsBuilder.SECOND_PASS_NO_SEARCH));
+                patched = true;
+            } else {
+                out.add(m);
+            }
+        }
+        if (!patched) {
+            out.add(0, Map.of("role", "system", "content", PromptsBuilder.SECOND_PASS_NO_SEARCH.trim()));
+        }
+        return out;
+    }
+
+    /**
+     * Streaming marker stripper: forwards tokens unchanged except for any {@code [NEEDS_SEARCH: ...]}
+     * marker, which is removed (even when split across chunks). Unlike {@link #wrapWithDynamicSearchLoop}
+     * this never triggers a search; it is a pure safety net for the second pass.
+     */
+    private static Flux<String> stripMarkerStream(Flux<String> in) {
+        StringBuilder buf = new StringBuilder();
+        return Flux.concat(
+                in.<String>handle((token, sink) -> {
+                    buf.append(token);
+                    String out = drainStrippable(buf);
+                    if (!out.isEmpty()) sink.next(out);
+                }),
+                Flux.defer(() -> {
+                    String rest = stripSearchMarkers(buf.toString());
+                    buf.setLength(0);
+                    return (rest == null || rest.isEmpty()) ? Flux.<String>empty() : Flux.just(rest);
+                }));
+    }
+
+    /**
+     * Pulls every marker-free, boundary-safe character out of {@code buf}, leaving behind only an
+     * in-progress marker or a trailing fragment that could still become one. Complete markers are
+     * dropped outright. Mirrors {@link #scanBuffer} but strips instead of triggering a search.
+     */
+    private static String drainStrippable(StringBuilder buf) {
+        StringBuilder out = new StringBuilder();
+        while (true) {
+            int openIdx = buf.indexOf(NEEDS_SEARCH_OPEN);
+            if (openIdx == -1) {
+                int hold = openMarkerPrefixOverlap(buf);
+                int safe = buf.length() - hold;
+                if (safe > 0) { out.append(buf, 0, safe); buf.delete(0, safe); }
+                return out.toString();
+            }
+            if (openIdx > 0) { out.append(buf, 0, openIdx); buf.delete(0, openIdx); }
+            int closeIdx = buf.indexOf(NEEDS_SEARCH_CLOSE, NEEDS_SEARCH_OPEN.length());
+            if (closeIdx == -1) return out.toString();   // marker still open -- wait for more tokens
+            buf.delete(0, closeIdx + 1);                  // drop the whole marker, keep scanning
+        }
+    }
+
+    /**
+     * Removes every {@code [NEEDS_SEARCH: ...]} marker (and a dangling, never-closed one) from a
+     * complete string, returning the trimmed remainder. Final backstop for the non-streaming path.
+     */
+    public static String stripSearchMarkers(String text) {
+        if (text == null) return null;
+        StringBuilder sb = new StringBuilder(text);
+        int open;
+        while ((open = sb.indexOf(NEEDS_SEARCH_OPEN)) != -1) {
+            int close = sb.indexOf(NEEDS_SEARCH_CLOSE, open + NEEDS_SEARCH_OPEN.length());
+            if (close == -1) { sb.delete(open, sb.length()); break; }
+            sb.delete(open, close + 1);
+        }
+        return sb.toString().trim();
+    }
+
     /**
      * Runs {@link KubernetesDynamicSearcher#searchAndSave} on a
      * {@link Schedulers#boundedElastic()} thread (blocking call, must not run on Netty
-     * event-loop), then starts a fresh Ollama streaming call with the retrieved docs
+     * event-loop), then starts a fresh gpt-oss streaming call with the retrieved docs
      * appended and pipes its tokens into {@code sink}.
      */
     private void startSecondStream(String convId,
@@ -201,7 +287,7 @@ public class NeedsSearchLoopService {
         // Notify the frontend that a dynamic search is in progress.
         sink.next(StreamChunk.status("searching", "Se caută documentație suplimentară..."));
 
-        final int dynCap = BudgetComputing.dynamicDocCapFor(ollama.budgetInputChars());
+        final int dynCap = BudgetComputing.dynamicDocCapFor(gpt.budgetInputChars());
         Mono.fromCallable(() -> dynamicSearcher.searchAndSave(convId, searchQuery, dynCap))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(searchResult -> {
@@ -209,13 +295,15 @@ public class NeedsSearchLoopService {
                     if (searchResult.urls() != null && !searchResult.urls().isEmpty()) {
                         sourceUrlsRef.set(searchResult.urls());
                     }
-                    List<Map<String, String>> augmented = new java.util.ArrayList<>(originalMessages);
+                    // Rebuild the message list with a hard "no more searches" directive on the system
+                    // prompt: the second pass already has the docs, so another marker would only loop/leak.
+                    List<Map<String, String>> augmented = withSecondPassSystemDirective(originalMessages);
                     if (dynamicDocs != null && !dynamicDocs.isBlank()) {
                         sink.next(StreamChunk.status("search_done",
                                 "Documentație găsită. Se generează răspunsul..."));
                         // Clip docs to the leftover window (RAG share) so the second stream stays in num_ctx.
                         augmented.add(Map.of("role", "user", "content",
-                                BudgetComputing.dynamicDocsMessage(dynamicDocs, BudgetComputing.dynamicDocBudget(originalMessages, ollama.budgetInputChars()))));
+                                BudgetComputing.dynamicDocsMessage(dynamicDocs, BudgetComputing.dynamicDocBudget(originalMessages, gpt.budgetInputChars()))));
                     } else {
                         logger.info("[stream] Dynamic search returned nothing; asking LLM to continue without it.");
                         sink.next(StreamChunk.status("search_empty",
@@ -224,7 +312,9 @@ public class NeedsSearchLoopService {
                                 "content",
                                 "Search yielded no new results. Please provide your best diagnosis or advice."));
                     }
-                    return ollama.chatStream(augmented);
+                    // Defensive backstop: strip any residual [NEEDS_SEARCH:...] from the second stream so
+                    // a non-compliant model can never leak the marker to the client (or have it persisted).
+                    return stripMarkerStream(gpt.chatStream(augmented));
                 })
                 .subscribe(token -> sink.next(StreamChunk.token(token)), sink::error, sink::complete);
     }
@@ -244,31 +334,35 @@ public class NeedsSearchLoopService {
                 logger.info("LLM requested dynamic search for: {}", query);
 
                 KubernetesDynamicSearcher.SearchResult searchResult =
-                        dynamicSearcher.searchAndSave(conversationId, query, BudgetComputing.dynamicDocCapFor(ollama.budgetInputChars()));
+                        dynamicSearcher.searchAndSave(conversationId, query, BudgetComputing.dynamicDocCapFor(gpt.budgetInputChars()));
                 String dynamicDocsText = searchResult.context();
                 if (searchResult.urls() != null && !searchResult.urls().isEmpty()) {
                     dynamicSourceUrls = searchResult.urls();
                 }
 
+                // Second-pass copy: same context plus a hard "no more searches" directive on the
+                // system prompt, then the marker turn. The caller's list stays untouched.
+                List<Map<String, String>> secondPass = withSecondPassSystemDirective(messages);
+                secondPass.add(Map.of("role", "assistant", "content", assistantText));
                 if (!dynamicDocsText.isBlank()) {
-                    // Add the marker turn first, then budget the docs against what's left of the
-                    // window so the second call cannot overflow num_ctx (clipped to the RAG share).
-                    messages.add(Map.of("role", "assistant", "content", assistantText));
-                    String docMsg = BudgetComputing.dynamicDocsMessage(dynamicDocsText, BudgetComputing.dynamicDocBudget(messages, ollama.budgetInputChars()));
-                    messages.add(Map.of("role", "user", "content", docMsg));
+                    // Budget the docs against what's left of the window so the second call cannot
+                    // overflow num_ctx (clipped to the RAG share).
+                    String docMsg = BudgetComputing.dynamicDocsMessage(dynamicDocsText, BudgetComputing.dynamicDocBudget(secondPass, gpt.budgetInputChars()));
+                    secondPass.add(Map.of("role", "user", "content", docMsg));
                     try {
-                        logger.info("Sending secondary request to Ollama with dynamic docs context...");
-                        assistantText = ollama.chat(messages).trim();
+                        logger.info("Sending secondary request to gpt-oss with dynamic docs context...");
+                        String raw = gpt.chat(secondPass);
+                        if (raw != null) assistantText = stripSearchMarkers(raw);
                     } catch (Exception e) {
-                        logger.error("Ollama secondary call failed", e);
+                        logger.error("gpt-oss secondary call failed", e);
                     }
                 } else {
                     logger.info("Dynamic search found nothing. Asking LLM to continue without it.");
-                    messages.add(Map.of("role", "assistant", "content", assistantText));
-                    messages.add(Map.of("role", "user", "content",
+                    secondPass.add(Map.of("role", "user", "content",
                             "Search yielded no new results. Please provide your best diagnosis or advice."));
                     try {
-                        assistantText = ollama.chat(messages).trim();
+                        String raw = gpt.chat(secondPass);
+                        if (raw != null) assistantText = stripSearchMarkers(raw);
                     } catch (Exception e) {
                     }
                 }

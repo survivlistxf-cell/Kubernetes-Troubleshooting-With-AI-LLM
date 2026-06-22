@@ -7,26 +7,70 @@ This folder contains a self-contained Kubernetes base for the application in a d
 - `postgres` (pgvector) for the backend + feedback embeddings
 - `backend` on port `8080`
 - `frontend` exposed as `NodePort 30082`
-- `ai-server` on port `8090` (Spring Boot AI layer — talks to Ollama + Elasticsearch)
+- `ai-server` on port `8090` (Spring Boot AI layer — chat on **gpt-oss** (external,
+  OpenAI-compatible), embeddings on Ollama, retrieval on Elasticsearch)
 - `elasticsearch` (single-node) on port `9200` for retrieval
-- `ollama` on port `11434`, **pinned to a dedicated VM** (CPU LLM inference)
+- `ollama` on port `11434` — now **embeddings only** (`nomic-embed-text`, CPU)
 
-## Prerequisites: the dedicated Ollama node
+## Architecture: chat vs embeddings
 
-Ollama (llama3.1 8B) does not fit on the worker nodes, so it runs on its own VM.
+- **Chat / answer generation** → **gpt-oss** at
+  `http://gpt-oss-120b.kubeflow-dcpd.kubeflow.int.stscloud.ro/v1/chat/completions`
+  (model `openai/gpt-oss-120b`, OpenAI-compatible, Bearer JWT). The token lives in a
+  k8s Secret (`gptoss-api`), never in git. See **Networking** below for why the URL
+  keeps the hostname and uses `hostAliases`.
+- **Embeddings** (case-based feedback retrieval) → stay on the Ollama VM
+  (`nomic-embed-text`). This is the only thing Ollama still serves.
+- **RAG** → Elasticsearch BM25 (no LLM / embeddings involved).
 
-1. Create the VM in OpenStack: **`c1a.2xlarge` (8 vCPU / 16 GB RAM) + 40 GB volume**.
-   This needs the RAM quota raised from 50 GB to ~64 GB (vCPU and the rest fit as-is).
-2. Join it to the cluster as a worker node (e.g. `ollama-1`).
-3. Label it and taint it so **only** Ollama lands there and nothing else does:
+## The gpt-oss API token (Secret)
+
+Create it in the cluster — **do not commit it**:
 
 ```bash
-kubectl label node ollama-1 workload=ollama
-kubectl taint node ollama-1 dedicated=ollama:NoSchedule
+kubectl -n kubexplain create secret generic gptoss-api \
+  --from-literal=api-key='<JWT>'
 ```
 
-The `ollama` Deployment has a matching `nodeSelector` + `toleration`; every other
-workload has neither, so it stays on the regular workers.
+`ai-server` reads it via `LLM_CHAT_API_KEY` (`secretKeyRef` → `gptoss-api/api-key`).
+
+## Networking: reaching gpt-oss
+
+`gpt-oss-120b.kubeflow-dcpd.kubeflow.int.stscloud.ro` is an internal host that the
+cluster DNS likely does **not** resolve (it was handed over as an `/etc/hosts` entry,
+`193.35.0.10`). The `ai-server` Deployment therefore injects the mapping via
+`hostAliases`. The hostname is kept in the URL (not a bare IP) because the
+`193.35.0.10` Ingress routes on the **Host header** (typical kubeflow). Verify from
+inside the cluster before deploy:
+
+```bash
+kubectl -n kubexplain run curltest --rm -it --image=curlimages/curl --restart=Never -- \
+  curl -s -o /dev/null -w "%{http_code}\n" \
+  --resolve gpt-oss-120b.kubeflow-dcpd.kubeflow.int.stscloud.ro:80:193.35.0.10 \
+  -X POST http://gpt-oss-120b.kubeflow-dcpd.kubeflow.int.stscloud.ro/v1/chat/completions \
+  -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" \
+  -d '{"model":"openai/gpt-oss-120b","messages":[{"role":"user","content":"salut"}],"max_tokens":20}'
+```
+
+Expect `200`. `401` = wrong token/secret; `404` = wrong path
+(`/v1/chat/completions` vs `/v1/completions`); `UnknownHost`/timeout = `hostAliases`
+missing or wrong.
+
+## The Ollama node (embeddings only)
+
+Embeddings with `nomic-embed-text` are light and run on CPU, so Ollama **no longer
+needs the heavy dedicated VM** it used for LLM inference. Its `resources` are reduced
+accordingly. The Deployment still carries a `nodeSelector` (`workload=ollama`) +
+`toleration` (`dedicated=ollama`) so placement is unchanged out of the box; if you
+want Ollama back on the regular workers, drop both from `ollama-deployment.yaml` and
+remove the node label/taint:
+
+```bash
+kubectl label node ollama-1 workload-
+kubectl taint node ollama-1 dedicated-
+```
+
+(The model store is a `hostPath`, so moving nodes re-pulls the ~270 MB embedding model once.)
 
 ## Images
 
@@ -55,21 +99,20 @@ docker push axiiiiiiii/proiect_licenta-ai-server:latest
 
 ## Apply
 
-Once the Ollama node is labelled/tainted and the images are pushed:
+Once the `gptoss-api` Secret exists and the images are pushed:
 
 ```bash
 kubectl apply -k k8s
 ```
 
-Watch the rollout — Ollama pulls ~5 GB of models on first start, so its pod
-takes a few minutes to become Ready:
+Watch the rollout — Ollama now pulls only `nomic-embed-text` (~270 MB) on first
+start, so it becomes Ready quickly:
 
 ```bash
 kubectl -n kubexplain get pods -o wide
-kubectl -n kubexplain logs deploy/ollama -f          # follow model pull
+kubectl -n kubexplain logs deploy/ollama -f          # follow embedding-model pull
+kubectl -n kubexplain logs deploy/ai-server -f       # first chat → "LLM tokens: prompt=… eval=…"
 ```
-
-Confirm placement: the `ollama` pod must be on `ollama-1`; everything else on the workers.
 
 ## OpenStack access
 
@@ -84,7 +127,8 @@ The floating IP attached to `lb-2` can stay as-is. No Ingress controller require
 ## Internal wiring (already set in the manifests)
 
 - `backend` → `ai-server`: `AI_SERVER_BASE_URL=http://ai-server:8090`
-- `ai-server` → Ollama: `OLLAMA_BASE_URL=http://ollama:11434`
+- `ai-server` → gpt-oss (chat): `LLM_CHAT_BASE_URL=http://gpt-oss-120b.kubeflow-dcpd.kubeflow.int.stscloud.ro/v1`, token via `gptoss-api` Secret
+- `ai-server` → Ollama (embeddings only): `OLLAMA_BASE_URL=http://ollama:11434`
 - `ai-server` → Elasticsearch: `KDIAG_RETRIEVAL_ENGINE=elastic`, `KDIAG_ELASTIC_URI=http://elasticsearch:9200`
 - `ai-server` / `backend` → Postgres: `jdbc:postgresql://postgres:5432/kubexplain_db`
 

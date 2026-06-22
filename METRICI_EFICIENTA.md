@@ -21,7 +21,7 @@ momentul redactării); fiecare linie indică sursa exactă cu număr de linie.
 | `MAX_RECENT_HISTORY_MESSAGES` | 12 | `Server/src/main/java/com/kdiag/server/ai/AiEngine.java` | 38 |
 | `SUMMARY_TRIGGER_HISTORY_MESSAGES` | 10 | `Server/src/main/java/com/kdiag/server/ai/AiEngine.java` | 39 |
 
-> **MAX_TOTAL_PROMPT_CHARS** este plafonul total al mesajelor trimise la Ollama (sistem + istoric +
+> **MAX_TOTAL_PROMPT_CHARS** este plafonul total al mesajelor trimise la gpt-oss (sistem + istoric +
 > mesaj curent). Mesajele istorice sunt truniate la `remainingBudget` pentru a rămâne în buget.  
 > **MAX_RAG_CONTEXT_CHARS** este bugetul de caractere pentru blocul de documentație injectată din
 > indexul Lucene sau baza de date.
@@ -101,7 +101,7 @@ semantică între chunk-uri consecutive.
 
 | Operație | Valoare | Sursă |
 |----------|--------:|-------|
-| Ollama chat timeout | `60s` (env `OLLAMA_TIMEOUT_SECONDS`) | `Server/src/main/resources/application.properties` → `OllamaClient.java` |
+| gpt-oss chat timeout | `300s` (env `LLM_CHAT_TIMEOUT_SECONDS`) | `Server/src/main/resources/application.properties` → `GptChatClient.java` |
 | Ollama embedding timeout | `30s` (env `OLLAMA_EMBEDDING_TIMEOUT`) | `Server/src/main/resources/application.properties` → `OllamaEmbeddingClient.java` |
 | RAG scraping — pagini statice | `8s` | `Server/src/main/java/com/kdiag/server/docs/KubernetesDocsScraper.java` |
 | RAG scraping — DuckDuckGo HTML | `10s` | `Server/src/main/java/com/kdiag/server/docs/KubernetesDynamicSearcher.java` |
@@ -119,18 +119,23 @@ semantică între chunk-uri consecutive.
 
 ---
 
-## 3. Parametri Ollama
+## 3. Parametri LLM (chat gpt-oss + embeddings Ollama)
 
 Valori implicite din `Server/src/main/resources/application.properties`, suprascrise prin variabile
-de mediu:
+de mediu. Chat-ul rulează pe gpt-oss (OpenAI-compatible) sub `llm.chat.*`; embeddings rămân pe Ollama sub `ollama.*`:
 
 | Proprietate | Valoare implicită | Variabilă de mediu |
 |-------------|:-----------------:|-------------------|
+| `llm.chat.base-url` | `http://localhost:11434/v1` | `LLM_CHAT_BASE_URL` |
+| `llm.chat.model` | `openai/gpt-oss-120b` | `LLM_CHAT_MODEL` |
+| `llm.chat.api-key` | _(gol)_ | `LLM_CHAT_API_KEY` |
+| `llm.chat.temperature` | `0.2` | `LLM_CHAT_TEMPERATURE` |
+| `llm.chat.timeout-seconds` | `300` | `LLM_CHAT_TIMEOUT_SECONDS` |
+| `llm.chat.max-output-tokens` | `0` (fără limită) | `LLM_CHAT_MAX_OUTPUT_TOKENS` |
+| `llm.chat.num-ctx` | `32768` | `LLM_CHAT_NUM_CTX` |
+| `llm.chat.output-reserve-fraction` | `0.15` | `LLM_CHAT_OUTPUT_RESERVE_FRACTION` |
+| `llm.chat.chars-per-token` | `3.0` | `LLM_CHAT_CHARS_PER_TOKEN` |
 | `ollama.base-url` | `http://localhost:11434` | `OLLAMA_BASE_URL` |
-| `ollama.model` | `llama3.1` | `OLLAMA_MODEL` |
-| `ollama.temperature` | `0.2` | `OLLAMA_TEMPERATURE` |
-| `ollama.timeout-seconds` | `60` | `OLLAMA_TIMEOUT_SECONDS` |
-| `ollama.num-ctx` | `8192` | `OLLAMA_NUM_CTX` |
 | `ollama.embedding-model` | `nomic-embed-text` | `OLLAMA_EMBEDDING_MODEL` |
 | `ollama.embedding-timeout-seconds` | `30` | `OLLAMA_EMBEDDING_TIMEOUT` |
 
@@ -182,7 +187,7 @@ Extragere text din pagini:
 
 ## 5. Streaming SSE end-to-end
 
-Trei salturi din frontend până la Ollama:
+Trei salturi din frontend până la gpt-oss:
 
 ```
 Browser (EventSource / fetch + ReadableStream)
@@ -194,10 +199,10 @@ Backend Spring MVC — AiForwardingService.forwardStream()
   │
 AI Server Spring WebFlux — ChatController.chatStream()
   │  Flux<String> → map to SSE events: meta / chunk / done / error
-  │  AiEngine.solveStream() → OllamaClient.chatStream()
-  │  POST /api/chat  (Ollama, stream=true, NDJSON)
+  │  AiEngine.solveStream() → GptChatClient.chatStream()
+  │  POST /v1/chat/completions  (gpt-oss, stream=true, SSE)
   │
-Ollama
+gpt-oss
 ```
 
 Tipuri de evenimente SSE:
@@ -263,7 +268,7 @@ Toate endpoint-urile sunt pe AI Server (port 8090 implicit):
   "totalFallbackResponses":   "<n>",
   "totalNeedsSearchTriggers": "<n>",
   "totalResponseTimeMs":      "<ms>",
-  "totalOllamaLatencyMs":     "<ms>",
+  "totalChatLatencyMs":       "<ms>",
   "totalEmbeddingLatencyMs":  "<ms>",
   "totalPromptChars":         "<n>",
   "totalResponseChars":       "<n>",
@@ -275,7 +280,7 @@ Toate endpoint-urile sunt pe AI Server (port 8090 implicit):
   "embeddingFailures":        "<n>",
   "numCtxOverflowsApprox":    "<n>",
   "avgResponseTimeMs":        "<ms>",
-  "avgOllamaLatencyMs":       "<ms>",
+  "avgChatLatencyMs":         "<ms>",
   "avgEmbeddingLatencyMs":    "<ms>",
   "avgPromptChars":           "<n>",
   "avgResponseChars":         "<n>",
@@ -318,9 +323,9 @@ Toate contoarele sunt `AtomicLong`; nu există `synchronized` pe calea normală 
 | Cazuri CBR returnate | `MAX_SIMILAR_CASES` | 3 |
 | Prag similaritate CBR | `SIMILARITY_THRESHOLD` | 0.75 |
 | Persist doc max | `ABSOLUTE_PERSIST_CHAR_CAP` | 500 000 chars |
-| Context Ollama | `ollama.num-ctx` | 8 192 tokens (~32 768 chars) |
+| Context chat (buget local) | `llm.chat.num-ctx` | 32 768 tokens |
 | Embedding model | `ollama.embedding-model` | nomic-embed-text (768 dims) |
-| Timeout Ollama | `ollama.timeout-seconds` | 60 s |
+| Timeout chat (gpt-oss) | `llm.chat.timeout-seconds` | 300 s |
 | Timeout embedding | `ollama.embedding-timeout-seconds` | 30 s |
 | Cache boosted URLs | `BOOSTED_URLS_TTL_MS` | 60 s |
 | Istoric brut max | `MAX_RECENT_HISTORY_MESSAGES` | 12 mesaje |

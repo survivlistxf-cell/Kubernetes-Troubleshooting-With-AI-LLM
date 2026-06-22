@@ -78,8 +78,9 @@ BM25 (Best Matching 25) e un algoritm de scoring pentru text retrieval, dezvolta
 
 **Schimbări tehnice:**
 - `OllamaClient` switchuit de la `/v1/chat/completions` la endpoint-ul nativ Ollama `/api/chat` care acceptă `options.num_ctx` (cel OpenAI-compat îl ignora tăcut).
+  > ⚠️ **Migrat ulterior** pe gpt-oss (OpenAI-compatible): clasa e acum `GptChatClient`, vorbește din nou `/v1/chat/completions` cu streaming SSE, iar `num_ctx` rămâne doar buget local de prompt. Vezi `PLAN_MIGRARE_GPTOSS.md`.
 - `num_ctx=8192` setat explicit (era default 2048).
-- Metodă nouă `OllamaClient.chatStream(messages)` returnând `Flux<String>` care parsează NDJSON.
+- Metodă `GptChatClient.chatStream(messages)` returnând `Flux<String>` (inițial NDJSON pe Ollama; acum SSE pe gpt-oss).
 - Metodă nouă `AiEngine.solveStream(...)` care construiește sincron promptul și emite chunks.
 - Endpoint nou `POST /v1/chat/stream` cu `produces = TEXT_EVENT_STREAM_VALUE`.
 - Backend: metodă nouă `AiForwardingService.forwardStream(...)` cu WebClient (RestTemplate-ul vechi păstrat pentru backward compat).
@@ -152,7 +153,7 @@ cu index HNSW pe embedding pentru cosine similarity search.
 
 **MetricsCollector** ca `@Component` cu contoare `AtomicLong` thread-safe pe tot hot path-ul:
 - Throughput: `totalChatRequests`, `totalStreamingRequests`, `totalFallbackResponses`, `totalNeedsSearchTriggers`
-- Latency: `totalResponseTimeMs`, `totalOllamaLatencyMs`, `totalEmbeddingLatencyMs`
+- Latency: `totalResponseTimeMs`, `totalChatLatencyMs`, `totalEmbeddingLatencyMs`
 - Mărime prompt/response: `totalPromptChars`, `totalResponseChars`
 - BM25: `bm25Searches`, `bm25EmptyResults`, `bm25BoostedSearches`
 - Feedback: `similarCasesQueries`, `similarCasesHits`, `embeddingFailures`
@@ -164,7 +165,7 @@ cu index HNSW pe embedding pentru cosine similarity search.
 - `GET /v1/metrics` — snapshot complet ca JSON
 - `POST /v1/metrics/reset` — pentru demo curat
 
-**Hook-uri:** `AiEngine`, `OllamaClient`, `OllamaEmbeddingClient`, `LuceneChunkIndex`, `FeedbackRetrievalService` toate primesc `MetricsCollector` injectat și raportează non-invaziv.
+**Hook-uri:** `AiEngine`, `GptChatClient`, `OllamaEmbeddingClient`, `LuceneChunkIndex`, `FeedbackRetrievalService` toate primesc `MetricsCollector` injectat și raportează non-invaziv.
 
 **Document:** `METRICI_EFICIENTA.md` rescris de la zero, citind constantele din cod actual (nu mai e desincronizat).
 
@@ -182,7 +183,7 @@ cu index HNSW pe embedding pentru cosine similarity search.
 "etcd","cri","csi","crd","cmd","env","ctx","gpu","cpu","mem","nfs","cwd","pvc","pv"
 ```
 
-**Sanity check num_ctx la startup:** `OllamaStartupCheck implements ApplicationRunner` apelează `GET /api/show`, parsează `model_info.<arch>.context_length`, compară cu `ollama.num-ctx` configurat. Log warn dacă e prea mare (Ollama trunchiază tăcut) sau prea mic (irosim capacitate).
+**Sanity check num_ctx la startup:** `GptStartupCheck implements ApplicationRunner` compară `llm.chat.num-ctx` configurat cu fereastra maximă raportată de model. Pe gpt-oss (OpenAI-compatible) lungimea contextului nu e expusă, deci `queryModelMaxContext()` întoarce `Optional.empty()` și check-ul e un no-op grațios (un singur INFO). `num-ctx` rămâne doar un buget local de prompt.
 
 ### 8. [NEEDS_SEARCH:] în streaming path (Bloc D)
 
@@ -510,7 +511,7 @@ POST /api/chat/stream              — proxy SSE către AI Server
 ## Configurare nouă în `application.properties`
 
 ```properties
-ollama.num-ctx=${OLLAMA_NUM_CTX:8192}
+llm.chat.num-ctx=${LLM_CHAT_NUM_CTX:8192}
 ollama.embedding-model=${OLLAMA_EMBEDDING_MODEL:nomic-embed-text}
 ollama.embedding-timeout-seconds=${OLLAMA_EMBEDDING_TIMEOUT:30}
 kdiag.lucene.dir=./lucene_index

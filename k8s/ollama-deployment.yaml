@@ -30,31 +30,33 @@ spec:
       containers:
         - name: ollama
           image: ollama/ollama:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 11434
               name: http
           env:
             - name: OLLAMA_HOST
               value: "0.0.0.0:11434"
-            # tine modelele incarcate in RAM intre request-uri (evita reload lent)
+            # tine modelul incarcat in RAM intre request-uri (evita reload lent)
             - name: OLLAMA_KEEP_ALIVE
               value: "24h"
-            # LLM + embedding incarcate simultan
+            # Doar embeddings (nomic-embed-text) => un singur model incarcat.
             - name: OLLAMA_MAX_LOADED_MODELS
-              value: "2"
+              value: "1"
+          # Embeddings cu nomic-embed-text (~270MB) sunt usoare si merg pe CPU,
+          # deci resursele sunt mult reduse fata de inferenta LLM.
           resources:
             requests:
-              cpu: "2"
-              memory: 8Gi
+              cpu: 500m
+              memory: 1Gi
             limits:
-              # lasam ~2GB nodului pentru OS pe un VM de 16GB
-              cpu: "8"
-              memory: 14Gi
+              cpu: "2"
+              memory: 4Gi
           volumeMounts:
             - name: ollama-models
               mountPath: /root/.ollama
-          # Dupa pornirea serverului, descarca modelele folosite de aplicatie.
+          # Dupa pornirea serverului, descarca DOAR modelul de embeddings.
+          # Chat-ul a migrat pe gpt-oss extern; aici nu mai e nevoie de modele LLM.
           # Ruleaza o singura data efectiv — daca exista deja pe disc, pull e instant.
           lifecycle:
             postStart:
@@ -62,7 +64,7 @@ spec:
                 command:
                   - /bin/sh
                   - -c
-                  - "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull llama3.2:3b; ollama pull llama3.1; ollama pull nomic-embed-text"
+                  - "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull nomic-embed-text"
           readinessProbe:
             httpGet:
               path: /

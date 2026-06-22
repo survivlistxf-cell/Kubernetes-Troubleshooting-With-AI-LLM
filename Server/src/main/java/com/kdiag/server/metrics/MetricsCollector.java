@@ -33,7 +33,7 @@ public class MetricsCollector {
     // Latency sums (ms) — divide by the corresponding request count for averages
     // =========================================================================
     private final AtomicLong totalResponseTimeMs    = new AtomicLong();
-    private final AtomicLong totalOllamaLatencyMs   = new AtomicLong();
+    private final AtomicLong totalChatLatencyMs   = new AtomicLong();
     private final AtomicLong totalEmbeddingLatencyMs = new AtomicLong();
 
     // =========================================================================
@@ -57,12 +57,12 @@ public class MetricsCollector {
     private final AtomicLong embeddingFailures   = new AtomicLong();
 
     // =========================================================================
-    // Ollama context budget
+    // Chat prompt context budget
     // =========================================================================
     /** Approximate count of requests where total prompt chars > numCtx * 4. */
     private final AtomicLong numCtxOverflowsApprox = new AtomicLong();
 
-    // Ground-truth token usage reported by Ollama (prompt_eval_count / eval_count).
+    // Ground-truth token usage reported by the chat model (prompt_tokens / completion_tokens).
     private final AtomicLong lastPromptTokens   = new AtomicLong();
     private final AtomicLong lastEvalTokens      = new AtomicLong();
     private final AtomicLong maxPromptTokens      = new AtomicLong();
@@ -110,7 +110,7 @@ public class MetricsCollector {
         totalResponseChars.addAndGet(responseChars);
     }
 
-    /** Called when Ollama returned null/blank and the local fallback was used. */
+    /** Called when the chat model returned null/blank and the local fallback was used. */
     public void recordFallbackResponse() {
         totalFallbackResponses.incrementAndGet();
     }
@@ -120,9 +120,9 @@ public class MetricsCollector {
         totalNeedsSearchTriggers.incrementAndGet();
     }
 
-    /** Called with the wall-clock ms of a completed Ollama chat call (blocking or first-chunk). */
-    public void recordOllamaLatency(long ms) {
-        totalOllamaLatencyMs.addAndGet(ms);
+    /** Called with the wall-clock ms of a completed gpt-oss chat call (blocking or first-chunk). */
+    public void recordChatLatency(long ms) {
+        totalChatLatencyMs.addAndGet(ms);
     }
 
     /** Called with the wall-clock ms of a successful embedding call. */
@@ -168,9 +168,9 @@ public class MetricsCollector {
     }
 
     /**
-     * Records ground-truth token usage reported by Ollama (prompt_eval_count / eval_count).
+     * Records ground-truth token usage reported by the chat model (prompt_tokens / completion_tokens).
      * This is the real measurement that replaces the chars*4 estimate: if prompt+eval reaches
-     * num_ctx, the window genuinely overflowed and Ollama truncated the prompt.
+     * num_ctx, the prompt budget genuinely exceeded the local window estimate.
      */
     public void recordTokenUsage(int promptTokens, int evalTokens, int numCtx) {
         lastPromptTokens.set(promptTokens);
@@ -232,7 +232,7 @@ public class MetricsCollector {
 
         // --- raw counters: latency ---
         m.put("totalResponseTimeMs",     totalResponseTimeMs.get());
-        m.put("totalOllamaLatencyMs",    totalOllamaLatencyMs.get());
+        m.put("totalChatLatencyMs",    totalChatLatencyMs.get());
         m.put("totalEmbeddingLatencyMs", totalEmbeddingLatencyMs.get());
 
         // --- raw counters: sizes ---
@@ -287,8 +287,8 @@ public class MetricsCollector {
 
             m.put("avgResponseTimeMs",
                     avgLong(totalResponseTimeMs.get(), Math.max(chatReqs, 1)));
-            m.put("avgOllamaLatencyMs",
-                    avgLong(totalOllamaLatencyMs.get(), Math.max(allReqs, 1)));
+            m.put("avgChatLatencyMs",
+                    avgLong(totalChatLatencyMs.get(), Math.max(allReqs, 1)));
             m.put("avgEmbeddingLatencyMs",
                     avgLong(totalEmbeddingLatencyMs.get(), Math.max(simQ, 1)));
             m.put("avgPromptChars",
@@ -319,7 +319,7 @@ public class MetricsCollector {
         totalFallbackResponses.set(0);
         totalNeedsSearchTriggers.set(0);
         totalResponseTimeMs.set(0);
-        totalOllamaLatencyMs.set(0);
+        totalChatLatencyMs.set(0);
         totalEmbeddingLatencyMs.set(0);
         totalPromptChars.set(0);
         totalResponseChars.set(0);

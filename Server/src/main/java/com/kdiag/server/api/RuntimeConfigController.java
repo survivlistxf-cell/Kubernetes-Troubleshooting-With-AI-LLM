@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kdiag.server.ai.helpers.BudgetComputing;
-import com.kdiag.server.ollama.OllamaClient;
+import com.kdiag.server.llm.GptChatClient;
 
 /**
  * Runtime tuning endpoints for benchmarking the context window without a restart.
@@ -33,30 +33,30 @@ import com.kdiag.server.ollama.OllamaClient;
 @RequestMapping(path = "/v1/config", produces = MediaType.APPLICATION_JSON_VALUE)
 public class RuntimeConfigController {
 
-    private final OllamaClient ollama;
+    private final GptChatClient gpt;
 
-    public RuntimeConfigController(OllamaClient ollama) {
-        this.ollama = ollama;
+    public RuntimeConfigController(GptChatClient gpt) {
+        this.gpt = gpt;
     }
 
     /** Switches num_ctx at runtime and returns the recomputed budget. */
     @PostMapping("/num-ctx")
     public Map<String, Object> setNumCtx(@RequestParam int value) {
-        ollama.setNumCtx(value);
+        gpt.setNumCtx(value);
         return budget();
     }
 
     /** Returns the current context window and every budget derived from it. */
     @GetMapping("/budget")
     public Map<String, Object> budget() {
-        int numCtx     = ollama.getNumCtx();
-        int inputChars = ollama.budgetInputChars();
+        int numCtx     = gpt.getNumCtx();
+        int inputChars = gpt.budgetInputChars();
 
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("numCtx", numCtx);
-        m.put("outputReserveFraction", ollama.getOutputReserveFraction());
-        m.put("outputTokenReserve", ollama.getOutputTokenReserve());
-        m.put("charsPerToken", ollama.getCharsPerToken());
+        m.put("outputReserveFraction", gpt.getOutputReserveFraction());
+        m.put("outputTokenReserve", gpt.getOutputTokenReserve());
+        m.put("charsPerToken", gpt.getCharsPerToken());
         m.put("inputCharCapacity", inputChars);
         m.put("maxTotalPromptChars", inputChars);
         m.put("maxTotalArtifactChars", BudgetComputing.artifactCapFor(inputChars));

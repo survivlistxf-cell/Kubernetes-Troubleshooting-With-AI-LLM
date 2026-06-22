@@ -12,7 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import com.kdiag.server.ai.history.HistoryService;
-import com.kdiag.server.ollama.OllamaClient;
+import com.kdiag.server.llm.GptChatClient;
 
 @Service
 public class ConversationSummaryService {
@@ -22,13 +22,13 @@ public class ConversationSummaryService {
     private static final int MAX_SUMMARY_CHARS                = 1600;
 
     private final HistoryService historyService;
-    private final OllamaClient ollama;
+    private final GptChatClient gpt;
 
     public ConversationSummaryService(HistoryService historyService,
-                                OllamaClient ollama
+                                GptChatClient gpt
                                     ){
         this.historyService = historyService;
-        this.ollama = ollama;
+        this.gpt = gpt;
     }
 
     private final ExecutorService summaryExecutor = Executors.newFixedThreadPool(2, runnable -> {
@@ -97,7 +97,7 @@ public class ConversationSummaryService {
 
         messages.add(Map.of("role", "user", "content", userPrompt.toString()));
 
-        String summary = ollama.chat(messages);
+        String summary = gpt.chat(messages);
         if (summary == null) {
             return null;
         }

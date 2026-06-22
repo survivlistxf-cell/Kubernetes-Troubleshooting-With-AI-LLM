@@ -245,6 +245,20 @@ svg { display: block; width: 1em; height: 1em; }
 
 .sidebar.collapsed .brand-text { opacity: 0; transform: translateX(-8px); pointer-events: none; }
 
+/* Collapsed rail (76px): stack the header vertically so the brand mark and the
+   toggle button fit and stay centered instead of overlapping in the narrow row. */
+.sidebar.collapsed .sidebar-header {
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0 1rem;
+}
+.sidebar.collapsed .brand {
+  flex: 0 0 auto;
+  justify-content: center;
+}
+.sidebar.collapsed .brand-text { display: none; }
+
 .toggle-sidebar {
   width: 32px;
   height: 32px;
@@ -893,6 +907,12 @@ input[type="checkbox"] { accent-color: var(--brand-500); cursor: pointer; }
   border-color: transparent;
   box-shadow: 0 4px 14px rgba(50, 108, 229, 0.25);
 }
+/* The user bubble has a blue gradient, so the global translucent-blue selection
+   is invisible (blue-on-blue). Use a high-contrast white highlight here instead. */
+.message.user .message-content ::selection,
+.message.user .message-content::selection { background: #ffffff; color: #1b2b50; }
+.message.user .message-content ::-moz-selection,
+.message.user .message-content::-moz-selection { background: #ffffff; color: #1b2b50; }
 .message-content > .md-p:last-child,
 .message-content > p:last-child { margin-bottom: 0; }
 
@@ -1135,6 +1155,13 @@ input[type="checkbox"] { accent-color: var(--brand-500); cursor: pointer; }
 }
 .composer-send:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(50, 108, 229, 0.38); }
 .composer-send svg { width: 16px; height: 16px; }
+
+/* Stop state — shown while the AI response is streaming so the button aborts it. */
+.composer-send.is-stopping {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.28);
+}
+.composer-send.is-stopping:hover { box-shadow: 0 8px 18px rgba(239, 68, 68, 0.42); }
 
 .composer-hint {
   font-size: 0.72rem;
@@ -1987,6 +2014,8 @@ body.theme-dark .cluster-card--default {
 @media (max-width: 720px) {
   .sidebar { width: var(--sidebar-w-collapsed); padding: 1.1rem 0.55rem; }
   .sidebar .brand-text { display: none; }
+  .sidebar .sidebar-header { flex-direction: column; align-items: center; gap: 0.5rem; padding: 0.4rem 0 1rem; }
+  .sidebar .brand { flex: 0 0 auto; justify-content: center; }
   .sidebar .nav-item .text { display: none; }
   .sidebar .nav-item { justify-content: center; padding: 0.55rem 0.4rem; }
   .sidebar .nav-section-label { display: none; }

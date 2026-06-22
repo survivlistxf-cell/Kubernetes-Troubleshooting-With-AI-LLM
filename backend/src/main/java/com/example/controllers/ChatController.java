@@ -146,7 +146,7 @@ public class ChatController {
         return aiService.forwardStream(finalUserMessage, finalAttachmentsObj, finalConvId, requestId)
                 // Intercept chunk events to accumulate the full response for persistence.
                 // Chunks are JSON-wrapped ({"text":"..."}) by the AI server so that
-                // leading/trailing whitespace inside Ollama tokens (" of", " the", …)
+                // leading/trailing whitespace inside chat-model tokens (" of", " the", …)
                 // survives the SSE transport — the W3C spec strips a single leading
                 // space from raw data: payloads, which would otherwise concatenate
                 // streamed tokens into a single space-less blob.

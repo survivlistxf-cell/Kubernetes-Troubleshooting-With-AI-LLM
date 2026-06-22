@@ -2,7 +2,7 @@ package com.kdiag.server.docs.index;
 
 import com.kdiag.server.entities.KubernetesDocPage;
 import com.kdiag.server.metrics.MetricsCollector;
-import com.kdiag.server.ollama.OllamaEmbeddingClient;
+import com.kdiag.server.llm.OllamaEmbeddingClient;
 import com.kdiag.server.repositories.KubernetesDocPageRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

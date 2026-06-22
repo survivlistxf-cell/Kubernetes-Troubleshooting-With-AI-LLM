@@ -78,7 +78,7 @@ Acest fisier este bazat pe inventarul din `METRICI_EFICIENTA.md` si propune opti
   - adauga retry 1x doar pe timeout pentru comenzi non-destructive.
 
 2. Log noise reduction
-- Unde: `AiForwardingService`, `OllamaClient`, `HistoryService`
+- Unde: `AiForwardingService`, `GptChatClient`, `HistoryService`
 - Recomandare:
   - reduce log level pentru payload preview in productie.
   - evita log pe fiecare insert history la INFO (muta pe DEBUG).

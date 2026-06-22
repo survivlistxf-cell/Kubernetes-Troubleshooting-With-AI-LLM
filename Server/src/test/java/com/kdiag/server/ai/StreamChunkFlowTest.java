@@ -9,7 +9,7 @@ import com.kdiag.server.ai.stream.StreamChunk;
 import com.kdiag.server.docs.KubernetesDocsScraper;
 import com.kdiag.server.docs.KubernetesDynamicSearcher;
 import com.kdiag.server.metrics.MetricsCollector;
-import com.kdiag.server.ollama.OllamaClient;
+import com.kdiag.server.llm.GptChatClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -57,7 +57,7 @@ import static org.mockito.Mockito.*;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class StreamChunkFlowTest {
 
-    @Mock OllamaClient              ollamaClient;
+    @Mock GptChatClient              gptClient;
     @Mock KubernetesDocsScraper     docsScraper;
     @Mock HistoryService            historyService;
     @Mock FeedbackRetrievalService  feedbackRetrievalService;
@@ -70,12 +70,12 @@ class StreamChunkFlowTest {
 
     @BeforeEach
     void setUp() {
-        aiEngine = new AiEngine(ollamaClient, docsScraper,
+        aiEngine = new AiEngine(gptClient, docsScraper,
                  feedbackRetrievalService, metrics, needsSearchLoop, conversationSummary, solveService);
 
         // Common stubs required by solveStream's synchronous setup phase.
-        when(ollamaClient.getNumCtx()).thenReturn(4096);
-        when(ollamaClient.budgetInputChars()).thenReturn(12000); // budgets derive from this now
+        when(gptClient.getNumCtx()).thenReturn(4096);
+        when(gptClient.budgetInputChars()).thenReturn(12000); // budgets derive from this now
         when(docsScraper.getRelevantDocsHybridBoosted(any(), anyInt(), any())).thenReturn("");
         when(docsScraper.getRelevantDocs(any())).thenReturn("");
         when(feedbackRetrievalService.getBoostedUrls()).thenReturn(Set.of());
@@ -98,7 +98,7 @@ class StreamChunkFlowTest {
      */
     @Test
     void plainStream_emitsOnlyTokenChunks_noStatus() {
-        when(ollamaClient.chatStream(any())).thenReturn(Flux.just("Hello", " world", "!"));
+        when(gptClient.chatStream(any())).thenReturn(Flux.just("Hello", " world", "!"));
 
         List<StreamChunk> chunks = aiEngine.solveStream("conv1", "What is a pod?", null)
                 .collectList()
@@ -123,7 +123,7 @@ class StreamChunkFlowTest {
      */
     @Test
     void needsSearch_firstChunkIsSearchingStatus() throws Exception {
-        when(ollamaClient.chatStream(any()))
+        when(gptClient.chatStream(any()))
                 .thenReturn(Flux.just("[NEEDS_SEARCH: nginx ingress]"))  // 1st — marker
                 .thenReturn(Flux.just("Nginx answer."));                  // 2nd — response
 
@@ -154,7 +154,7 @@ class StreamChunkFlowTest {
      */
     @Test
     void needsSearch_withDocs_emitsSearchDoneBeforeTokens() throws Exception {
-        when(ollamaClient.chatStream(any()))
+        when(gptClient.chatStream(any()))
                 .thenReturn(Flux.just("[NEEDS_SEARCH: crd definition]"))
                 .thenReturn(Flux.just("CRD answer."));
 
@@ -191,7 +191,7 @@ class StreamChunkFlowTest {
      */
     @Test
     void needsSearch_emptyDocs_emitsSearchEmptyBeforeTokens() throws Exception {
-        when(ollamaClient.chatStream(any()))
+        when(gptClient.chatStream(any()))
                 .thenReturn(Flux.just("[NEEDS_SEARCH: obscure topic]"))
                 .thenReturn(Flux.just("Best effort answer."));
 
@@ -229,7 +229,7 @@ class StreamChunkFlowTest {
     void needsSearch_afterLongContent_stillTriggersSearch_markerNeverLeaked() {
         String longPrefix = "A".repeat(300); // well past the old 256-char buffer window
 
-        when(ollamaClient.chatStream(any()))
+        when(gptClient.chatStream(any()))
                 .thenReturn(Flux.just(longPrefix, "[NEEDS_SEARCH: elearning backend 404 error]"))
                 .thenReturn(Flux.just("Here is the real answer."));
 
@@ -257,7 +257,7 @@ class StreamChunkFlowTest {
      */
     @Test
     void needsSearch_splitAcrossTwoChunks_stillDetected() {
-        when(ollamaClient.chatStream(any()))
+        when(gptClient.chatStream(any()))
                 .thenReturn(Flux.just("Let me check that. [NEEDS_SEA", "RCH: nginx 403]"))
                 .thenReturn(Flux.just("Nginx 403 answer."));
 
@@ -286,7 +286,7 @@ class StreamChunkFlowTest {
     void plainLongResponse_noMarker_passesThroughUnchanged_noSearch() {
         String longAnswer = "B".repeat(500);
 
-        when(ollamaClient.chatStream(any())).thenReturn(Flux.just(longAnswer));
+        when(gptClient.chatStream(any())).thenReturn(Flux.just(longAnswer));
 
         StepVerifier.create(aiEngine.solveStream("conv7", "explain something long", null))
                 .expectNextMatches(c -> c.type() == StreamChunk.Type.TOKEN

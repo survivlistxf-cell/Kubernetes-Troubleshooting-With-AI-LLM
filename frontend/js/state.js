@@ -5,6 +5,11 @@ export const state = {
   // UI state
   isFirstMessage: true,
 
+  // Streaming control
+  activeStreamController: null, // AbortController for the in-flight SSE stream (null when idle)
+  isStreaming: false,           // true while an AI response is streaming
+  stickToBottom: true,          // auto-follow streamed output unless the user scrolls up
+
   // Conversation
   conversationIdKey: 'conversationId',
 

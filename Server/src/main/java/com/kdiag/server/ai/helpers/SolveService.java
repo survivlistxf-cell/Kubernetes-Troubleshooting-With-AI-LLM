@@ -16,7 +16,7 @@ import com.kdiag.server.ai.history.HistoryService;
 import com.kdiag.server.ai.stream.StreamChunk;
 import com.kdiag.server.docs.KubernetesDynamicSearcher;
 import com.kdiag.server.metrics.MetricsCollector;
-import com.kdiag.server.ollama.OllamaClient;
+import com.kdiag.server.llm.GptChatClient;
 import com.kdiag.server.protocol.KdiagModels.Artifact;
 
 import reactor.core.publisher.Flux;
@@ -27,21 +27,21 @@ public class SolveService {
     private static final Logger logger = LoggerFactory.getLogger(SolveService.class);
     private static final int MAX_RECENT_HISTORY_MESSAGES     = 12;
 
-    private final OllamaClient ollama;
+    private final GptChatClient gpt;
     private final FeedbackRetrievalService feedbackRetrievalService;
     private final HistoryService historyService;
     private final MetricsCollector metrics;
     private final ConversationSummaryService conversationSummary;
     private final NeedsSearchLoopService needsSearchLoopService;
 
-    public SolveService(OllamaClient ollama, 
+    public SolveService(GptChatClient gpt, 
                         FeedbackRetrievalService feedbackRetrievalService,
                         HistoryService historyService,
                         MetricsCollector metrics,
                         KubernetesDynamicSearcher dynamicSearcher,
                         ConversationSummaryService conversationSummary,
                         NeedsSearchLoopService needsSearchLoopService){
-        this.ollama = ollama;
+        this.gpt = gpt;
         this.feedbackRetrievalService = feedbackRetrievalService;
         this.historyService = historyService;
         this.metrics = metrics;
@@ -64,17 +64,17 @@ public class SolveService {
 
     //******Step 1 function******
     public ArtifactProcessingRecord artifactProcessing(String userText, List<Artifact> artifacts, 
-        FeedbackRetrievalService frs, OllamaClient ollama){
+        FeedbackRetrievalService frs, GptChatClient gpt){
         // 1. Process and split artifacts (especially .txt files with multiple sections)
         // In processedArtifacts pastram doar informatiile relevante (taiem zgomot si caractere
         // folosite inutil).
-        List<Artifact> processedArtifacts = ArtifactProcessing.processArtifacts(artifacts, ollama.budgetInputChars());
+        List<Artifact> processedArtifacts = ArtifactProcessing.processArtifacts(artifacts, gpt.budgetInputChars());
 
         // 1a. Compute size-based budget
         //Pe artefactele deja comprimate aplică FIFO size-based: fiecare ia min(rawLen, rămas) 
         // din artifactCapFor; când se epuizează, restul primesc 0. 
         //  RAG-ul scade proporțional (ragMax − 0.5×consumat, floor ragMin).
-        BudgetComputing.ArtifactBudget budget = BudgetComputing.computeArtifactBudget(processedArtifacts, ollama.budgetInputChars());
+        BudgetComputing.ArtifactBudget budget = BudgetComputing.computeArtifactBudget(processedArtifacts, gpt.budgetInputChars());
         int rawTotal = processedArtifacts.stream()
                 .mapToInt(a -> (a == null || a.getContent() == null) ? 0 : a.getContent().length())
                 .sum();
@@ -143,7 +143,7 @@ public class SolveService {
                                                 List<HistoryService.BankedTurn> bank,
                                                 List<String> evictedLabels,
                                                 BudgetComputing.ArtifactBudget budget){
-        // Se construieste intregul mesaj care va fi trimis la ollama:
+        // Se construieste intregul mesaj care va fi trimis la gpt:
         // Un summary al conversatiei
         // Istoricul (pana la 12 mesaje)
         // System Prompt-ul tiered (daca e primul tur i se dau mai multe indicatii, daca nu, mai putine)
@@ -159,8 +159,8 @@ public class SolveService {
                 conversationId == null ? -1 : historyEntries.size());
 
         String systemPrompt = PromptsBuilder.buildSystemPrompt(relevantDocs, conversationSummaryText, similarCases,
-                bank, evictedLabels, budget, isFirstTurn, ollama.budgetInputChars());
-        int remainingBudget = ollama.budgetInputChars();
+                bank, evictedLabels, budget, isFirstTurn, gpt.budgetInputChars());
+        int remainingBudget = gpt.budgetInputChars();
         messages.add(Map.of("role", "system", "content", systemPrompt));
         remainingBudget -= systemPrompt.length();
 
@@ -195,15 +195,15 @@ public class SolveService {
     }
 
     //****Step 5c function******
-    public String callOllama(String conversationId, List<Map<String, String>> messages, String userText, 
+    public String callChat(String conversationId, List<Map<String, String>> messages, String userText,
                     List<Artifact> processedArtifacts,
                     String relevantDocs){
         String llm = null;
         try {
-            logger.info("Sending {} messages to Ollama for conversation {}", messages.size(), conversationId);
-            llm = ollama.chat(messages);
+            logger.info("Sending {} messages to gpt-oss for conversation {}", messages.size(), conversationId);
+            llm = gpt.chat(messages);
         } catch (Exception e) {
-            logger.error("Ollama call failed", e);
+            logger.error("gpt-oss chat call failed", e);
         }
 
         final boolean usedFallback = (llm == null || llm.isBlank());
@@ -256,20 +256,20 @@ public class SolveService {
         final int streamPromptChars = messages.stream()
                 .mapToInt(msg -> msg.getOrDefault("content", "").length())
                 .sum();
-        metrics.recordNumCtxOverflowIfApplicable(streamPromptChars, ollama.getNumCtx());
+        metrics.recordNumCtxOverflowIfApplicable(streamPromptChars, gpt.getNumCtx());
 
-        logger.info("Starting streaming Ollama call for conversation {}", convId);
+        logger.info("Starting streaming gpt-oss call for conversation {}", convId);
 
         final AtomicReference<List<String>> sourceUrlsRef = new AtomicReference<>();
 
-        return needsSearchLoopService.wrapWithDynamicSearchLoop(convId, messages, ollama.chatStream(messages), sourceUrlsRef)
+        return needsSearchLoopService.wrapWithDynamicSearchLoop(convId, messages, gpt.chatStream(messages), sourceUrlsRef)
                 .doOnNext(chunk -> {
                     if (chunk.type() == StreamChunk.Type.TOKEN && chunk.text() != null) {
                         buffer.append(chunk.text());
                     }
                 })
                 .onErrorResume(e -> {
-                    logger.error("Streaming Ollama call failed for conversation {}", convId, e);
+                    logger.error("Streaming gpt-oss call failed for conversation {}", convId, e);
                     String fallback = AiEngine.fallbackAnswer(finalUserText, finalProcessed, relevantDocs);
                     if (convId != null && !fallback.isBlank()) {
                         historyService.addEntry(convId, "assistant", fallback);

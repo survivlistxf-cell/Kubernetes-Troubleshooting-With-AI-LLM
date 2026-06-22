@@ -14,6 +14,14 @@ spec:
     spec:
       # Fara toleration => NU ajunge pe nodul Ollama (care e tainted).
       # Ruleaza pe worker-ele normale.
+      #
+      # gpt-oss e intern: DNS-ul clusterului nu il rezolva, asa ca injectam
+      # maparea direct in /etc/hosts-ul pod-ului. Hostname-ul TREBUIE pastrat
+      # in URL (nu IP direct) ca Ingress-ul kubeflow sa ruteze pe Host header.
+      hostAliases:
+        - ip: "193.35.0.10"
+          hostnames:
+            - "gpt-oss-120b.kubeflow-dcpd.kubeflow.int.stscloud.ro"
       containers:
         - name: ai-server
           # Construit din ./Server (modulul com.kdiag.server, artifact ai-server-0.1.0).
@@ -34,18 +42,31 @@ spec:
             # heap mai mic decat limita de 2Gi (lasa loc pt metaspace + off-heap)
             - name: JAVA_OPTS
               value: "-Xmx1536m -Xms512m"
-            # --- Ollama (pe VM-ul dedicat, via service ClusterIP) ---
+            # --- Chat LLM: gpt-oss (OpenAI-compatible, extern) ---
+            # base-url se termina in /v1; clientul adauga /chat/completions.
+            # Hostname-ul e rezolvat via hostAliases (vezi mai jos) — DNS-ul
+            # clusterului nu il rezolva, iar Ingress-ul ruteaza pe Host header.
+            - name: LLM_CHAT_BASE_URL
+              value: http://gpt-oss-120b.kubeflow-dcpd.kubeflow.int.stscloud.ro/v1
+            - name: LLM_CHAT_MODEL
+              value: openai/gpt-oss-120b
+            - name: LLM_CHAT_TIMEOUT_SECONDS
+              value: "300"
+            # Buget local de prompt. gpt-oss expune max_model_len=128000, deci
+            # folosim toata fereastra. Reglabil de aici fara rebuild (edit + rollout).
+            - name: LLM_CHAT_NUM_CTX
+              value: "128000"
+            - name: LLM_CHAT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gptoss-api
+                  key: api-key
+            # --- Ollama (acum DOAR embeddings, via service ClusterIP) ---
             - name: OLLAMA_BASE_URL
               value: http://ollama:11434
-            # Model mic pentru viteza pe CPU (fara GPU). Cand ai GPU pe nodul
-            # ollama, schimba inapoi pe "llama3.1" pentru calitate maxima.
-            - name: OLLAMA_MODEL
-              value: llama3.2:3b
             - name: OLLAMA_EMBEDDING_MODEL
               value: nomic-embed-text
-            # Inferenta pe CPU e lenta — marim timeout-urile (implicit 60s/30s).
-            - name: OLLAMA_TIMEOUT_SECONDS
-              value: "300"
+            # Embeddings pe CPU — pastram timeout-ul marit (implicit 30s).
             - name: OLLAMA_EMBEDDING_TIMEOUT
               value: "120"
             # --- Retrieval pe ElasticSearch ---
@@ -68,7 +89,7 @@ spec:
             - name: SPRING_JPA_HIBERNATE_DDL_AUTO
               value: update
             - name: BRAVE_API_KEY
-              valueFrom:
+              valueFrom: 
                 secretKeyRef:
                   name: brave-api
                   key: api-key

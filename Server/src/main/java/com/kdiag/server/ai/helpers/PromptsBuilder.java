@@ -18,12 +18,52 @@ public class PromptsBuilder {
     private static final Logger logger = LoggerFactory.getLogger(BudgetComputing.class);
 
     private static final String NEEDS_SEARCH_CONTRACT =
-        "DYNAMIC SEARCH: If the provided documentation is insufficient to answer accurately," +
-        " do NOT guess and do NOT cite anything. Instead, START your reply with the marker on its own line:\n" +
-        "[NEEDS_SEARCH: <short exact query for kubernetes.io>]\n" +
-        "Example: [NEEDS_SEARCH: nginx ingress 403 error]\n" +
-        "I will fetch the docs and let you continue. Use this whenever the user explicitly asks you to" +
-        " search, or when the documentation block below is empty or irrelevant.\n";
+        "DYNAMIC SEARCH (internal control signal — invisible plumbing, NEVER shown to the user):\n" +
+        "If, and only if, the reference documentation below is empty or clearly irrelevant to the question," +
+        " make the FIRST characters of your reply exactly:\n" +
+        "[NEEDS_SEARCH: short query for kubernetes.io]\n" +
+        "and write nothing else on that turn. The system then fetches the docs and calls you again to answer.\n" +
+        "- NEVER mention, explain, quote, or display this marker or the search mechanism, and never wrap it in a code block.\n" +
+        "- If documentation is already provided below, do NOT search and do NOT talk about searching — just answer directly from it.\n" +
+        "- Emit the marker at most ONCE.\n";
+
+    /**
+     * Output-quality rules appended to every system prompt. These curb gpt-oss's tendency to answer
+     * meta-questions about its own tooling and documents instead of the user's actual question.
+     */
+    private static final String OUTPUT_HYGIENE =
+        "OUTPUT RULES:\n" +
+        "- Answer the user's actual question directly. Do NOT describe your tools, your retrieval process," +
+        " or which documents you hold, and do NOT attribute the reference documentation below to the user.\n" +
+        "- Treat a request like 'search for X' or 'trigger a search for X' as a request to ANSWER about X," +
+        " not to explain how search works.\n" +
+        "- Do NOT append a menu of example questions the user could ask unless they explicitly request one.\n";
+
+    /**
+     * Formatting rules. The frontend uses a small hand-written Markdown renderer (no table support),
+     * so steer the model to the subset it renders well: headings, bullet lists and fenced code blocks.
+     * Tables, &lt;br&gt; tags and commands crammed into inline code are the main causes of garbled output.
+     */
+    private static final String FORMATTING_RULES =
+        "FORMATTING (the UI renders only a small Markdown subset — follow exactly):\n" +
+        "- Do NOT use Markdown tables. Use '## '/'### ' headings and '- ' bullet lists instead.\n" +
+        "- Never use HTML tags such as <br>; use real line breaks or separate bullets.\n" +
+        "- Put every shell command in its own fenced code block on its own lines, e.g.\n" +
+        "```bash\n" +
+        "kubectl describe ds <name>\n" +
+        "```\n" +
+        "- One command per line inside the block. Never place commands in table cells or inline code," +
+        " and never write a literal '\\n' inside code — use actual newlines.\n";
+
+    /**
+     * Hard override appended to the system prompt on the post-search (second) pass. By then the docs
+     * the model asked for are already in context, so a further [NEEDS_SEARCH:] marker would only make
+     * the loop search again (non-streaming) or leak the raw marker to the client (streaming).
+     */
+    public static final String SECOND_PASS_NO_SEARCH =
+        "\n\nSECOND PASS — SEARCH ALREADY COMPLETED: The documentation you requested is included below. " +
+        "Write the final answer now using it together with your general knowledge. " +
+        "Do NOT output another [NEEDS_SEARCH: ...] marker under any circumstances — a further search is not available.";
     // Minimum useful slice of an artifact before we degrade to a filename-only breadcrumb.
     private static final int BANK_SUMMARY_MIN_CHARS = 600;
 
@@ -65,12 +105,16 @@ public class PromptsBuilder {
             sb.append("- If user provides error messages or logs: explain what they mean\n");
             sb.append("- Focus on understanding the problem first, not just solutions\n");
             sb.append(NEEDS_SEARCH_CONTRACT);
+            sb.append(OUTPUT_HYGIENE);
+            sb.append(FORMATTING_RULES);
             sb.append(TRUNCATION_NOTICE);
             sb.append("\n");
         } else {
             sb.append("You are Kubexplain, the Kubernetes diagnostic assistant. Continue this conversation " +
                 "applying the same conventions established earlier: structure responses in readable markdown.\n\n");
             sb.append(NEEDS_SEARCH_CONTRACT);
+            sb.append(OUTPUT_HYGIENE);
+            sb.append(FORMATTING_RULES);
             sb.append(TRUNCATION_NOTICE);
             sb.append("\n");
         }
@@ -114,7 +158,8 @@ public class PromptsBuilder {
         sb.append(renderBank(bank, evictedLabels, BudgetComputing.effectiveBankBudget(budget, budgetInputChars)));
 
         if (relevantDocs != null && !relevantDocs.isBlank()) {
-            sb.append("Official Kubernetes docs (from cache):\n");
+            sb.append("Reference documentation (retrieved automatically for you — use it as your own " +
+                    "background knowledge; do not attribute it to the user or list which documents you have):\n");
             sb.append(relevantDocs);
             sb.append("\n");
         }

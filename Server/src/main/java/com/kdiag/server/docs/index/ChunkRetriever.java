@@ -61,6 +61,26 @@ public interface ChunkRetriever {
     List<DocChunk> search(String queryText, int topK, Set<String> boostedUrls);
 
     // -------------------------------------------------------------------------
+    // Relevance gate (optional per-implementation)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Minimum semantic relevance required for retrieval results to count as usable
+     * context. When the best match falls below this threshold, {@link #search} returns
+     * an empty list — the caller then presents an empty documentation block to the LLM,
+     * which (per the system-prompt contract) makes it emit a {@code [NEEDS_SEARCH:]}
+     * marker and fall back to live documentation search.
+     *
+     * <p>Default implementations are no-ops so that backends without a comparable
+     * absolute score (e.g. Lucene BM25, whose scores are query-dependent and unbounded)
+     * simply ignore the gate.
+     */
+    default void setMinRelevance(double minRelevance) { /* no-op by default */ }
+
+    /** Current relevance gate; 0.0 means disabled. */
+    default double getMinRelevance() { return 0.0; }
+
+    // -------------------------------------------------------------------------
     // Maintenance operations
     // -------------------------------------------------------------------------
 

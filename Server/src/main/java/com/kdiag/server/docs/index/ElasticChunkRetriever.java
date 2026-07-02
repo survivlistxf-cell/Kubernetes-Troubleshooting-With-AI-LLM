@@ -70,6 +70,19 @@ public class ElasticChunkRetriever implements ChunkRetriever {
     @Value("${kdiag.retrieval.topk:12}")
     private int defaultTopK;
 
+    /**
+     * Relevance gate over the kNN (semantic) leg of the hybrid search. ES scores cosine
+     * kNN hits as {@code (1 + cos) / 2}, i.e. in [0..1] and comparable across queries —
+     * unlike the RRF fusion scores (rank-based) or BM25 scores (unbounded), which is why
+     * the gate is applied to the raw kNN top hit, before fusion. When the best kNN score
+     * is below the gate, the whole result set is treated as irrelevant and discarded, so
+     * the LLM sees an empty documentation block and can trigger a [NEEDS_SEARCH:] pass.
+     * 0.85 ≈ cosine 0.70 for nomic-embed-text. Runtime-tunable via
+     * {@code POST /v1/config/min-relevance} (no restart), 0 disables the gate.
+     */
+    @Value("${kdiag.retrieval.min-relevance:0.85}")
+    private volatile double minRelevance;
+
     /** RRF rank constant (k); 60 is the standard default also used by Elasticsearch's native rrf. */
     private static final int RRF_K = 60;
     /** Per-list rank window: how many hits to pull from each of the BM25 and kNN lists before fusing. */
@@ -80,6 +93,16 @@ public class ElasticChunkRetriever implements ChunkRetriever {
     // -------------------------------------------------------------------------
     // Constructor
     // -------------------------------------------------------------------------
+
+    @Override
+    public void setMinRelevance(double minRelevance) {
+        this.minRelevance = minRelevance;
+    }
+
+    @Override
+    public double getMinRelevance() {
+        return minRelevance;
+    }
 
     public ElasticChunkRetriever(ElasticsearchClient esClient,
                                  OllamaEmbeddingClient embeddingClient,
@@ -361,6 +384,21 @@ public class ElasticChunkRetriever implements ChunkRetriever {
                         ),
                         ObjectNode.class
                 );
+
+                // Relevance gate: judge semantic relevance on the raw kNN score of the best
+                // hit (normalized [0..1]), not on RRF/BM25 scores which are not comparable
+                // across queries. Below the gate -> no usable context -> empty result, so
+                // the model falls back to [NEEDS_SEARCH:] (dynamic mode) or general knowledge.
+                double maxKnn = (!knn.hits().hits().isEmpty() && knn.hits().hits().get(0).score() != null)
+                        ? knn.hits().hits().get(0).score() : 0.0;
+                if (minRelevance > 0 && maxKnn < minRelevance) {
+                    logger.info("Relevance gate: kNN top score {} < {} for '{}' — returning no context",
+                            String.format(java.util.Locale.ROOT, "%.3f", maxKnn), minRelevance,
+                            queryText.length() > 80 ? queryText.substring(0, 80) + "..." : queryText);
+                    return List.of();
+                }
+                logger.info("Relevance gate: kNN top score {} (gate {})",
+                        String.format(java.util.Locale.ROOT, "%.3f", maxKnn), minRelevance);
 
                 return fuseRrf(List.of(bm25, knn), topK);
             }

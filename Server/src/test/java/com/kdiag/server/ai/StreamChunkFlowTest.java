@@ -72,7 +72,8 @@ class StreamChunkFlowTest {
     void setUp() {
         aiEngine = new AiEngine(gptClient, docsScraper,
                  feedbackRetrievalService, metrics, needsSearchLoop, conversationSummary, solveService,
-                 new com.kdiag.server.config.AblationConfig(true, true));
+                 new com.kdiag.server.config.AblationConfig(true, true),
+                 null /* dynamicSearcher: proactive fetch eșuează silențios în teste */);
 
         // Common stubs required by solveStream's synchronous setup phase.
         when(gptClient.getNumCtx()).thenReturn(4096);

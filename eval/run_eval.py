@@ -33,6 +33,7 @@ Cerințe: python3 (stdlib), kubectl configurat pe clusterul de test, AI serverul
 import argparse
 import csv
 import json
+import re
 import subprocess
 import sys
 import time
@@ -279,6 +280,9 @@ def main():
     ap.add_argument("--adhoc", default=None,
                     help="fișier JSON cu un scenariu manual: {id, question, expected, evidence:[[args kubectl]...]}; "
                          "fără apply/wait/delete — defectul îl provoci și îl repari tu")
+    ap.add_argument("--no-evidence", action="store_true",
+                    help="NU atașează dovezile (describe/logs) — doar întrebarea. Condiția "
+                         "'dovezi incomplete': aici cunoștințele (RAG) contează, nu citirea erorii")
     ap.add_argument("--skip-cluster", action="store_true",
                     help="nu aplică manifeste; refolosește dovezile din ultimul run (debug)")
     args = ap.parse_args()
@@ -345,19 +349,30 @@ def main():
             else:
                 evidence = evidence_cache.get(sid, [])
 
+            evidence_used = [] if args.no_evidence else evidence
+            question = scen["question"]
+            if args.no_evidence:
+                # Fără dovezi, întrebarea nu are voie să pretindă că ele sunt atașate —
+                # altfel modelul (corect) le cere înapoi în loc să diagnosticheze.
+                question = re.sub(r'[^.?!]*\battached\b[^.?!]*[.?!]\s*', ' ', question)
+                question = re.sub(r'\s+', ' ', question).strip()
+                question += (" I cannot access the cluster right now, so list the most likely "
+                             "causes in order of probability and explain how to verify and fix "
+                             "each one.")
             for run in range(1, args.runs + 1):
                 m_before = http_json("GET", f"{args.ai_url}/v1/metrics")
                 try:
-                    answer, elapsed = ask(args.ai_url, scen["question"], evidence)
+                    answer, elapsed = ask(args.ai_url, question, evidence_used)
                 except Exception as e:
                     answer, elapsed = f"__ERROR__: {e}", -1
                 m_after = http_json("GET", f"{args.ai_url}/v1/metrics")
-                ns_delta = (m_after.get("needsSearchTriggers", 0) or 0) - \
-                           (m_before.get("needsSearchTriggers", 0) or 0)
+                ns_delta = (m_after.get("totalNeedsSearchTriggers", 0) or 0) - \
+                           (m_before.get("totalNeedsSearchTriggers", 0) or 0)
 
                 rec = dict(scenario=sid, mode=mode, run=run,
                            latency_s=round(elapsed, 1), needs_search=ns_delta,
-                           question=scen["question"], expected=scen["expected"],
+                           evidence_attached=bool(evidence_used),
+                           question=question, expected=scen["expected"],
                            keywords=scen["keywords"], answer=answer)
                 results_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 results_f.flush()
@@ -365,7 +380,7 @@ def main():
                 ans_file = out_dir / f"{sid}_{mode}_run{run}.md"
                 ans_file.write_text(
                     f"# {sid} | mode={mode} | run={run} | {rec['latency_s']}s | "
-                    f"needs_search={ns_delta}\n\n**Q:** {scen['question']}\n\n"
+                    f"needs_search={ns_delta}\n\n**Q:** {question}\n\n"
                     f"**Expected:** {scen['expected']}\n\n---\n\n{answer}\n",
                     encoding="utf-8")
                 summary_rows.append([sid, mode, run, rec["latency_s"], ns_delta,

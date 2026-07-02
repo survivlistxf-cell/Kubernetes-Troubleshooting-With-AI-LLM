@@ -12,7 +12,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.kdiag.server.ai.helpers.BudgetComputing;
 import com.kdiag.server.config.AblationConfig;
+import com.kdiag.server.docs.index.ChunkRetriever;
 import com.kdiag.server.llm.GptChatClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 /**
  * Runtime tuning endpoints for benchmarking the context window without a restart.
@@ -36,10 +38,37 @@ public class RuntimeConfigController {
 
     private final GptChatClient gpt;
     private final AblationConfig ablation;
+    private final ChunkRetriever retriever;
 
-    public RuntimeConfigController(GptChatClient gpt, AblationConfig ablation) {
+    public RuntimeConfigController(GptChatClient gpt, AblationConfig ablation,
+                                   @Qualifier("activeChunkRetriever") ChunkRetriever retriever) {
         this.gpt = gpt;
         this.ablation = ablation;
+        this.retriever = retriever;
+    }
+
+    /**
+     * Reads the retrieval relevance gate (0 = disabled; only effective on the
+     * ElasticSearch engine, where kNN scores are absolute and comparable).
+     */
+    @GetMapping("/min-relevance")
+    public Map<String, Object> minRelevance() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("minRelevance", retriever.getMinRelevance());
+        return m;
+    }
+
+    /**
+     * Sets the retrieval relevance gate at runtime (no restart) — used to calibrate
+     * the [NEEDS_SEARCH:] trigger during the Chapter 6 evaluation.
+     */
+    @PostMapping("/min-relevance")
+    public Map<String, Object> setMinRelevance(@RequestParam double value) {
+        if (value < 0 || value > 1) {
+            throw new IllegalArgumentException("min-relevance must be in [0..1]");
+        }
+        retriever.setMinRelevance(value);
+        return minRelevance();
     }
 
     /**

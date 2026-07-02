@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 
 import com.kdiag.server.ai.feedback.FeedbackRetrievalService;
+import com.kdiag.server.ai.helpers.BudgetComputing;
 import com.kdiag.server.ai.helpers.ConversationSummaryService;
 import com.kdiag.server.ai.helpers.NeedsSearchLoopService;
 import com.kdiag.server.ai.helpers.PromptsBuilder;
@@ -43,6 +44,7 @@ public class AiEngine {
     private final NeedsSearchLoopService needsSearchLoopService;
     private final SolveService solveService;
     private final AblationConfig ablation;
+    private final KubernetesDynamicSearcher dynamicSearcher;
 
     public AiEngine(GptChatClient gpt, KubernetesDocsScraper docsScraper,
             FeedbackRetrievalService feedbackRetrievalService,
@@ -50,7 +52,8 @@ public class AiEngine {
             NeedsSearchLoopService needsSearchLoopService,
             ConversationSummaryService conversationSummary,
             SolveService solveService,
-            AblationConfig ablation) {
+            AblationConfig ablation,
+            KubernetesDynamicSearcher dynamicSearcher) {
         this.gpt = gpt;
         this.docsScraper = docsScraper;
         this.feedbackRetrievalService = feedbackRetrievalService;
@@ -58,6 +61,44 @@ public class AiEngine {
         this.needsSearchLoopService = needsSearchLoopService;
         this.solveService = solveService;
         this.ablation = ablation;
+        this.dynamicSearcher = dynamicSearcher;
+    }
+
+    // -------------------------------------------------------------------------
+    // Proactive dynamic fetch (server-side, deterministic)
+    // -------------------------------------------------------------------------
+
+    private record ProactiveFetch(String docs, List<String> urls) {}
+
+    /**
+     * Server-side dynamic documentation fetch, triggered when the relevance gate
+     * decided the static knowledge base has nothing usable for this question.
+     *
+     * <p>The [NEEDS_SEARCH:] marker remains available to the model as a secondary
+     * mechanism, but the primary trigger is deterministic: relying on the LLM to
+     * emit the marker proved unreliable in evaluation (gpt-oss consistently chose
+     * to answer from parametric memory even when instructed otherwise). Detecting
+     * the gap from retrieval scores and searching before the first LLM call removes
+     * that dependency entirely.
+     *
+     * <p>Counts as a NEEDS_SEARCH trigger in metrics (same semantics: a live
+     * documentation search caused by missing local knowledge).
+     */
+    private ProactiveFetch proactiveDynamicFetch(String conversationId, String userText) {
+        try {
+            logger.info("Relevance gate returned no context — proactive dynamic search for: {}",
+                    userText != null && userText.length() > 80 ? userText.substring(0, 80) + "..." : userText);
+            metrics.recordNeedsSearchTrigger();
+            KubernetesDynamicSearcher.SearchResult sr = dynamicSearcher.searchAndSave(
+                    conversationId, userText,
+                    BudgetComputing.dynamicDocCapFor(gpt.budgetInputChars()));
+            if (sr != null && sr.context() != null && !sr.context().isBlank()) {
+                return new ProactiveFetch(sr.context(), sr.urls());
+            }
+        } catch (Exception e) {
+            logger.warn("Proactive dynamic search failed (continuing without docs): {}", e.getMessage());
+        }
+        return new ProactiveFetch("", null);
     }
 
     // -------------------------------------------------------------------------
@@ -89,6 +130,16 @@ public class AiEngine {
                                                                 docsScraper)
                 : "";
 
+        // 2b. Proactive dynamic fetch: pragul de relevanta a decis ca baza statica nu
+        // acopera intrebarea -> serverul cauta documentatia live INAINTE de primul apel
+        // LLM (declansare determinista, nu depinde de emiterea marker-ului de catre model).
+        List<String> proactiveUrls = null;
+        if (ablation.isDynamicSearchEnabled() && relevantDocs.isBlank()) {
+            ProactiveFetch PF = proactiveDynamicFetch(conversationId, userText);
+            relevantDocs = PF.docs();
+            proactiveUrls = PF.urls();
+        }
+
         // 3. Build current user message content
         // Aici se adauga si mesajul userului si informatia din artefacte
         String userContent = PromptsBuilder.buildUserPrompt(userText, APR.processedArtifacts(),
@@ -101,7 +152,7 @@ public class AiEngine {
         solveService.addUserMessageToHistory(conversationId, userContent);
 
         // 5. Build full message list for Ollama
-        FullMessageRecord FMR = solveService.buildFullMessage(conversationId, relevantDocs, 
+        FullMessageRecord FMR = solveService.buildFullMessage(conversationId, relevantDocs,
                                                     APR.similarCases(), ABR.bank(), ABR.evictedLabels(),
                                                     APR.budget());
 
@@ -120,12 +171,16 @@ public class AiEngine {
         String assistantText = solveService.callChat(conversationId, FMR.messages(), userText, APR.processedArtifacts(), relevantDocs);
 
         // --- SECONDARY DYNAMIC RAG LOOP ---
+        // Ramane activ ca mecanism secundar: daca modelul totusi emite [NEEDS_SEARCH:]
+        // (de ex. considera documentatia primita irelevanta), bucla functioneaza ca inainte.
         var DRR = needsSearchLoopService.dynamicRagLoopFunction(conversationId, assistantText, FMR.messages());
 
-        // 6. Save assistant response to history
-        solveService.saveAssistantResponseToHistory(conversationId, DRR.assistantText(), recordExchange, 
-                                        DRR.dynamicSourceUrls(), userText, solveStart, solvePromptChars);
-        
+        // 6. Save assistant response to history (sursele: bucla secundara are prioritate,
+        // altfel cele din cautarea proactiva)
+        List<String> sourceUrls = DRR.dynamicSourceUrls() != null ? DRR.dynamicSourceUrls() : proactiveUrls;
+        solveService.saveAssistantResponseToHistory(conversationId, DRR.assistantText(), recordExchange,
+                                        sourceUrls, userText, solveStart, solvePromptChars);
+
         return new AiResult(DRR.assistantText(), null);
     }
 
@@ -194,6 +249,14 @@ public class AiEngine {
                                                                 docsScraper)
                 : "";
 
+        // 2b. Proactive dynamic fetch (vezi solve()). Ruleaza sincron in faza de setup a
+        // stream-ului. Nota: pe calea de streaming URL-urile sursei proactive nu sunt
+        // propagate in qa_feedback (limitare acceptata); pagina descarcata este oricum
+        // salvata si indexata de searchAndSave, deci cunostintele raman in baza.
+        if (ablation.isDynamicSearchEnabled() && relevantDocs.isBlank()) {
+            relevantDocs = proactiveDynamicFetch(conversationId, userText).docs();
+        }
+
         // 3. Build current user message content
         // Aici se adauga si mesajul userului si informatia din artefacte
         String userContent = PromptsBuilder.buildUserPrompt(userText, APR.processedArtifacts(),
@@ -206,7 +269,7 @@ public class AiEngine {
         solveService.addUserMessageToHistory(conversationId, userContent);
 
         // 5. Build full message list for Ollama
-        FullMessageRecord FMR = solveService.buildFullMessage(conversationId, relevantDocs, 
+        FullMessageRecord FMR = solveService.buildFullMessage(conversationId, relevantDocs,
                                                     APR.similarCases(), ABR.bank(), ABR.evictedLabels(),
                                                     APR.budget());
 
@@ -222,7 +285,7 @@ public class AiEngine {
         metrics.recordNumCtxOverflowIfApplicable(solvePromptChars, gpt.getNumCtx());
 
         // Final function call for streaming
-        return solveService.streamFluxFunction(conversationId, userText, 
+        return solveService.streamFluxFunction(conversationId, userText,
                                                 APR.processedArtifacts(), FMR.messages(),
                                                 relevantDocs, streamSolveStart, recordExchange);
     }

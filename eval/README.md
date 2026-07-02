@@ -60,6 +60,38 @@ python run_eval.py --modes dynamic --scenarios s11,s12,s13
 Agregarea pentru Tabelele 6.2/6.3: cauza corectă per celulă = vot majoritar (2 din 3
 rulări); timpul = mediana celor 3 rulări.
 
+Condiția `--no-evidence`: întrebarea e reformulată automat (fără „is attached", plus
+cerința de a enumera cauzele probabile). Notare: cauza corectă = cauza reală apare
+printre cauzele enumerate (nu neapărat prima); remedierea = cea pentru cauza reală.
+
+## Pragul de relevanță (declanșarea NEEDS_SEARCH)
+
+Retrieval-ul întoarce ACUM context doar dacă cel mai bun hit kNN depășește pragul
+`kdiag.retrieval.min-relevance` (implicit **0.85**, scor ES normalizat `(1+cos)/2`,
+adică ~cos 0.70). Sub prag, blocul de documentație e gol → modelul emite
+`[NEEDS_SEARCH:]` (în modul dynamic) sau răspunde din cunoștințe generale (static).
+
+Calibrare (fără restart):
+
+```bash
+# vezi pragul curent / schimbă-l
+curl http://localhost:8090/v1/config/min-relevance
+curl -X POST 'http://localhost:8090/v1/config/min-relevance?value=0.88'
+```
+
+Serverul loghează la fiecare cerere `Relevance gate: kNN top score X (gate Y)` —
+rulează un scenariu acoperit de baza statică (ex. s01) și unul exclus (ex. s12),
+citește scorurile din log și așază pragul ÎNTRE ele. Dacă s01 dă ~0.90 și s12 dă
+~0.83, pragul 0.85–0.87 e corect. Dacă cele două scoruri sunt apropiate, crește
+pragul spre scorul lui s01, dar notează în teză valoarea aleasă și cum ai ales-o.
+
+Atenție: după prima declanșare reușită pe un subiect, pagina descărcată dinamic se
+indexează (is_dynamic=true) — rulările 2–3 vor găsi context peste prag și NU vor mai
+căuta. Asta e comportamentul proiectat (baza învață); în teză raportează-l ca atare
+(rularea 1: needs_search=1, rulările 2–3: cache hit). Pentru rulări strict
+independente, șterge paginile dinamice între rulări (DELETE FROM kubernetes_doc_pages
+WHERE is_dynamic=true; apoi POST /v1/index/rebuild dacă e cazul).
+
 ## Curățenie
 
 ```bash

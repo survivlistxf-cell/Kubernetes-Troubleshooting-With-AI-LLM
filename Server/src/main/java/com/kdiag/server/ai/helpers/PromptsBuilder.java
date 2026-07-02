@@ -185,8 +185,14 @@ public class PromptsBuilder {
             sb.append("Cite ONLY URLs that appear verbatim in the context above. Never invent or guess links.\n");
         } else {
             sb.append("No documentation is available. Do NOT include any links or a 'References'/'Sources' section. ");
+            // With dynamic search available, an empty knowledge base means the search MUST run:
+            // the system explicitly prefers grounding answers in fetched documentation over
+            // answering from parametric memory alone. (An optional phrasing was tried first,
+            // but the model consistently chose to answer without searching.)
             sb.append(dynamicSearchAllowed
-                ? "Either answer from general knowledge clearly labeled as such, or emit a [NEEDS_SEARCH: ...] marker as described above.\n"
+                ? "The knowledge base returned nothing relevant for this question, so your reply MUST "
+                  + "start with a [NEEDS_SEARCH: ...] marker (as described above) to fetch the "
+                  + "documentation before answering. Do not answer without it.\n"
                 : "Answer from general knowledge clearly labeled as such.\n");
         }
 
@@ -307,12 +313,15 @@ public class PromptsBuilder {
                 }
             }
 
-            String hybridSearchResult = docsScraper.getRelevantDocsHybridBoosted(
+            // NOTA: fallback-ul istoric pe getRelevantDocs() (potrivire de cuvinte-cheie
+            // peste paginile intregi) a fost eliminat intentionat. El se activa exact cand
+            // pragul de relevanta decidea ca baza nu acopera intrebarea si re-umplea blocul
+            // de documentatie cu pagini doar tangential legate — ceea ce anula si declansarea
+            // proactiva a cautarii dinamice, si instructiunea de [NEEDS_SEARCH:] din prompt.
+            // Un rezultat gol aici este acum un semnal purtator de sens: "baza locala nu
+            // acopera intrebarea", tratat mai departe de AiEngine.
+            return docsScraper.getRelevantDocsHybridBoosted(
                     query.toString(), maxRagChars, boostedUrls);
-            if (!hybridSearchResult.isBlank()) {
-                return hybridSearchResult;
-            }
-            return docsScraper.getRelevantDocs(query.toString());
         } catch (Exception e) {
             logger.error("Failed to fetch docs (continuing without docs)", e);
             return "";

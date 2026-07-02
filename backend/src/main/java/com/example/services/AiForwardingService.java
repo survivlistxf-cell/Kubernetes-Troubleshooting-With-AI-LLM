@@ -64,6 +64,23 @@ public class AiForwardingService {
     }
 
     /**
+     * Reads the current RAG ablation mode from the AI server
+     * ({@code GET /v1/config/rag-mode}). Returns {@code {mode, ragEnabled, dynamicSearchEnabled}}.
+     */
+    public Map<?, ?> getRagMode() {
+        return restTemplate.getForObject(aiServerBaseUrl + "/v1/config/rag-mode", Map.class);
+    }
+
+    /**
+     * Switches the RAG ablation mode on the AI server
+     * ({@code POST /v1/config/rag-mode?value=none|static|dynamic}).
+     */
+    public Map<?, ?> setRagMode(String mode) {
+        return restTemplate.postForObject(
+                aiServerBaseUrl + "/v1/config/rag-mode?value={mode}", null, Map.class, mode);
+    }
+
+    /**
      * Forward a user message to the AI server.
      *
      * @return AI response text, or "__AI_HTTP_ERROR__<code>" on 4xx/5xx, or null if

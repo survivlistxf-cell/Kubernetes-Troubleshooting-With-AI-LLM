@@ -1,0 +1,18 @@
+# S04 — CPU throttling: buclă infinită cu limită de CPU foarte mică (25m).
+# Podul rulează, dar e sever limitat — simptom: aplicație extrem de lentă.
+# Cauza așteptată: limits.cpu prea mic; se mărește limita.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s04-cpu-throttle
+  namespace: kubexplain-eval
+  labels: { eval-scenario: s04 }
+spec:
+  restartPolicy: Always
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["sh", "-c", "while true; do :; done"]
+      resources:
+        requests: { cpu: "10m" }
+        limits: { cpu: "25m" }

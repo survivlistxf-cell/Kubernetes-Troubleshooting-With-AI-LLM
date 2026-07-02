@@ -1,0 +1,46 @@
+# S06 — RBAC insuficient: SA-ul are doar `get pods`, dar aplicația face `list secrets`.
+# Cauza așteptată: răspuns Forbidden; se adaugă permisiunea lipsă în Role.
+# NOTĂ: necesită imaginea bitnami/kubectl (sau echivalent cu kubectl inclus).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: s06-limited-sa
+  namespace: kubexplain-eval
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: s06-limited-role
+  namespace: kubexplain-eval
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: s06-limited-binding
+  namespace: kubexplain-eval
+subjects:
+  - kind: ServiceAccount
+    name: s06-limited-sa
+    namespace: kubexplain-eval
+roleRef:
+  kind: Role
+  name: s06-limited-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s06-rbac
+  namespace: kubexplain-eval
+  labels: { eval-scenario: s06 }
+spec:
+  serviceAccountName: s06-limited-sa
+  restartPolicy: Always
+  containers:
+    - name: app
+      image: bitnami/kubectl:latest
+      command: ["sh", "-c", "kubectl get secrets -n kubexplain-eval; sleep 5; exit 1"]

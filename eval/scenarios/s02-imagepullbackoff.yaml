@@ -1,0 +1,12 @@
+# S02 — ImagePullBackOff: imagine inexistentă.
+# Cauza așteptată: imaginea nu poate fi descărcată (nume/tag greșit sau lipsă credențiale).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s02-imagepull
+  namespace: kubexplain-eval
+  labels: { eval-scenario: s02 }
+spec:
+  containers:
+    - name: app
+      image: nginx:tag-inexistent-xyz-123

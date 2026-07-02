@@ -195,10 +195,10 @@ public class IndexController {
             @RequestParam(name = "dryRun", defaultValue = "false") boolean dryRun) {
         DynamicPageCleanupService.CleanupResult r = cleanupService.runCleanup(dryRun);
         return ResponseEntity.ok(Map.of(
-                "candidates", r.candidates(),
-                "deleted",    r.deleted(),
-                "dryRun",     r.dryRun(),
-                "ageDays",    r.ageDays()
+                "candidates",    r.candidates(),
+                "deleted",       r.deleted(),
+                "dryRun",        r.dryRun(),
+                "retentionDays", r.retentionDays()
         ));
     }
 

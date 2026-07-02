@@ -1,0 +1,18 @@
+# S03 — OOMKilled: procesul alocă mai multă memorie decât limita.
+# `tail` reține în memorie tot ce primește → depășește limita de 64Mi.
+# Cauza așteptată: limită de memorie prea mică față de consumul real.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s03-oomkilled
+  namespace: kubexplain-eval
+  labels: { eval-scenario: s03 }
+spec:
+  restartPolicy: Always
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["sh", "-c", "head -c 512m /dev/zero | tail"]
+      resources:
+        requests: { memory: "32Mi" }
+        limits: { memory: "64Mi" }

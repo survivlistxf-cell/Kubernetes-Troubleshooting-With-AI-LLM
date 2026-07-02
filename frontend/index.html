@@ -575,6 +575,23 @@
                                         <span class="switch-track"><span class="switch-thumb"></span></span>
                                     </label>
                                 </div>
+
+                                <h3 class="settings-section-title">AI assistant</h3>
+                                <div class="settings-row">
+                                    <div class="settings-row-text">
+                                        <div class="settings-row-title">Retrieval mode (RAG)</div>
+                                        <div class="settings-row-desc">
+                                            Controls how much documentation context the assistant receives.
+                                            Applies server-wide, immediately, to all new questions.
+                                        </div>
+                                        <div id="rag-mode-feedback" class="settings-row-desc" aria-live="polite"></div>
+                                    </div>
+                                    <select id="rag-mode-select" class="form-control" style="max-width: 300px;" disabled>
+                                        <option value="none">No RAG &mdash; model only</option>
+                                        <option value="static">Static RAG &mdash; local knowledge base (air-gapped)</option>
+                                        <option value="dynamic">Static + dynamic RAG &mdash; live documentation search</option>
+                                    </select>
+                                </div>
                             </section>
                         </div>
                     </div>

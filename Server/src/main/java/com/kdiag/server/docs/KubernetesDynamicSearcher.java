@@ -30,7 +30,7 @@ public class KubernetesDynamicSearcher {
 
     private static final Logger logger = LoggerFactory.getLogger(KubernetesDynamicSearcher.class);
     private static final int BRAVE_TIMEOUT_MS = 10000;
-    private static final int MAX_SEARCH_RESULTS = 2;
+    private static final int MAX_SEARCH_RESULTS = 4;
     // Default per-dynamic-doc cap used when no explicit budget is passed (backward-compat).
     // Callers that know the live context window (AiEngine) pass a num_ctx-scaled value instead.
     private static final int MAX_DYNAMIC_DOC_CHARS = 10000;

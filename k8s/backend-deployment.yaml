@@ -7,10 +7,14 @@ spec:
   selector:
     matchLabels:
       app: backend
+      app.kubernetes.io/name: kubexplain
+      app.kubernetes.io/part-of: kubexplain
   template:
     metadata:
       labels:
         app: backend
+        app.kubernetes.io/name: kubexplain
+        app.kubernetes.io/part-of: kubexplain
     spec:
       containers:
         - name: backend
@@ -43,14 +47,14 @@ spec:
               value: update
           readinessProbe:
             httpGet:
-              path: /api/hello
+              path: /api/health
               port: 8080
             initialDelaySeconds: 60
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
             httpGet:
-              path: /api/hello
+              path: /api/health
               port: 8080
             initialDelaySeconds: 120
             periodSeconds: 20

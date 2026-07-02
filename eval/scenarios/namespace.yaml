@@ -1,0 +1,6 @@
+# Namespace dedicat evaluării — izolează erorile injectate de restul clusterului.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubexplain-eval
+  labels: { purpose: kubexplain-evaluation }

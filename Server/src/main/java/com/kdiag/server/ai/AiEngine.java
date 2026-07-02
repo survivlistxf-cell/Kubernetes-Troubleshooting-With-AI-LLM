@@ -18,6 +18,7 @@ import com.kdiag.server.ai.helpers.SolveService.ArtifactBankRecord;
 import com.kdiag.server.ai.helpers.SolveService.ArtifactProcessingRecord;
 import com.kdiag.server.ai.helpers.SolveService.FullMessageRecord;
 import com.kdiag.server.ai.stream.StreamChunk;
+import com.kdiag.server.config.AblationConfig;
 import com.kdiag.server.docs.KubernetesDocsScraper;
 import com.kdiag.server.docs.KubernetesDynamicSearcher;
 import com.kdiag.server.metrics.MetricsCollector;
@@ -41,19 +42,22 @@ public class AiEngine {
     private final MetricsCollector metrics;
     private final NeedsSearchLoopService needsSearchLoopService;
     private final SolveService solveService;
+    private final AblationConfig ablation;
 
     public AiEngine(GptChatClient gpt, KubernetesDocsScraper docsScraper,
             FeedbackRetrievalService feedbackRetrievalService,
             MetricsCollector metrics,
             NeedsSearchLoopService needsSearchLoopService,
             ConversationSummaryService conversationSummary,
-            SolveService solveService) {
+            SolveService solveService,
+            AblationConfig ablation) {
         this.gpt = gpt;
         this.docsScraper = docsScraper;
         this.feedbackRetrievalService = feedbackRetrievalService;
         this.metrics = metrics;
         this.needsSearchLoopService = needsSearchLoopService;
         this.solveService = solveService;
+        this.ablation = ablation;
     }
 
     // -------------------------------------------------------------------------
@@ -76,10 +80,14 @@ public class AiEngine {
         // 2. Fetch relevant docs (boost-aware, dynamic ragChars)
         // Aici se construieste un string cu 12 chunkuri cele mai relevante din ES
         // cu cele 2 modalitati de evaluare (BM25 si kNN embedding)
-        String relevantDocs = PromptsBuilder.fetchRelevantDocs(userText, APR.processedArtifacts(), 
-                                                                APR.boosterUrls(), 
-                                                                APR.budget().ragChars(), 
-                                                                docsScraper);
+        // Ablation switch: cu RAG dezactivat (config "fara RAG" din evaluare) nu se
+        // regaseste nicio documentatie — modelul primeste doar starea clusterului.
+        String relevantDocs = ablation.isRagEnabled()
+                ? PromptsBuilder.fetchRelevantDocs(userText, APR.processedArtifacts(),
+                                                                APR.boosterUrls(),
+                                                                APR.budget().ragChars(),
+                                                                docsScraper)
+                : "";
 
         // 3. Build current user message content
         // Aici se adauga si mesajul userului si informatia din artefacte
@@ -177,10 +185,14 @@ public class AiEngine {
         // 2. Fetch relevant docs (boost-aware, dynamic ragChars)
         // Aici se construieste un string cu 12 chunkuri cele mai relevante din ES
         // cu cele 2 modalitati de evaluare (BM25 si kNN embedding)
-        String relevantDocs = PromptsBuilder.fetchRelevantDocs(userText, APR.processedArtifacts(), 
-                                                                APR.boosterUrls(), 
-                                                                APR.budget().ragChars(), 
-                                                                docsScraper);
+        // Ablation switch: cu RAG dezactivat (config "fara RAG" din evaluare) nu se
+        // regaseste nicio documentatie — modelul primeste doar starea clusterului.
+        String relevantDocs = ablation.isRagEnabled()
+                ? PromptsBuilder.fetchRelevantDocs(userText, APR.processedArtifacts(),
+                                                                APR.boosterUrls(),
+                                                                APR.budget().ragChars(),
+                                                                docsScraper)
+                : "";
 
         // 3. Build current user message content
         // Aici se adauga si mesajul userului si informatia din artefacte

@@ -14,6 +14,7 @@ import com.kdiag.server.ai.AiEngine;
 import com.kdiag.server.ai.feedback.FeedbackRetrievalService;
 import com.kdiag.server.ai.history.HistoryService;
 import com.kdiag.server.ai.stream.StreamChunk;
+import com.kdiag.server.config.AblationConfig;
 import com.kdiag.server.docs.KubernetesDynamicSearcher;
 import com.kdiag.server.metrics.MetricsCollector;
 import com.kdiag.server.llm.GptChatClient;
@@ -33,20 +34,23 @@ public class SolveService {
     private final MetricsCollector metrics;
     private final ConversationSummaryService conversationSummary;
     private final NeedsSearchLoopService needsSearchLoopService;
+    private final AblationConfig ablation;
 
-    public SolveService(GptChatClient gpt, 
+    public SolveService(GptChatClient gpt,
                         FeedbackRetrievalService feedbackRetrievalService,
                         HistoryService historyService,
                         MetricsCollector metrics,
                         KubernetesDynamicSearcher dynamicSearcher,
                         ConversationSummaryService conversationSummary,
-                        NeedsSearchLoopService needsSearchLoopService){
+                        NeedsSearchLoopService needsSearchLoopService,
+                        AblationConfig ablation){
         this.gpt = gpt;
         this.feedbackRetrievalService = feedbackRetrievalService;
         this.historyService = historyService;
         this.metrics = metrics;
         this.conversationSummary = conversationSummary;
         this.needsSearchLoopService = needsSearchLoopService;
+        this.ablation = ablation;
     }
 
     public record ArtifactProcessingRecord(List<Artifact> processedArtifacts, 
@@ -159,7 +163,8 @@ public class SolveService {
                 conversationId == null ? -1 : historyEntries.size());
 
         String systemPrompt = PromptsBuilder.buildSystemPrompt(relevantDocs, conversationSummaryText, similarCases,
-                bank, evictedLabels, budget, isFirstTurn, gpt.budgetInputChars());
+                bank, evictedLabels, budget, isFirstTurn, gpt.budgetInputChars(),
+                ablation.isDynamicSearchEnabled());
         int remainingBudget = gpt.budgetInputChars();
         messages.add(Map.of("role", "system", "content", systemPrompt));
         remainingBudget -= systemPrompt.length();

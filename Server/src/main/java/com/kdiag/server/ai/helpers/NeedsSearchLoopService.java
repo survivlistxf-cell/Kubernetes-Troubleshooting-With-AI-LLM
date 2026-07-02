@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import com.kdiag.server.ai.stream.StreamChunk;
+import com.kdiag.server.config.AblationConfig;
 import com.kdiag.server.docs.KubernetesDynamicSearcher;
 import com.kdiag.server.metrics.MetricsCollector;
 import com.kdiag.server.llm.GptChatClient;
@@ -29,15 +30,18 @@ public class NeedsSearchLoopService {
     private final GptChatClient gpt;
     private final KubernetesDynamicSearcher dynamicSearcher;
     private final MetricsCollector metrics;
+    private final AblationConfig ablation;
 
     public record DynamicRagResult(String assistantText, List<String> dynamicSourceUrls) {}
-    
+
     public NeedsSearchLoopService(GptChatClient gpt,
                              KubernetesDynamicSearcher dynamicSearcher,
-                             MetricsCollector metrics) {
+                             MetricsCollector metrics,
+                             AblationConfig ablation) {
         this.gpt = gpt;
         this.dynamicSearcher = dynamicSearcher;
         this.metrics = metrics;
+        this.ablation = ablation;
     }
     // -------------------------------------------------------------------------
     // Streaming NEEDS_SEARCH detection loop
@@ -67,6 +71,13 @@ public class NeedsSearchLoopService {
             List<Map<String, String>> originalMessages,
             Flux<String> firstStream,
             AtomicReference<List<String>> sourceUrlsRef) {
+
+        // Ablation switch: with dynamic search disabled (config "none"/"static") never trigger
+        // a live search — just strip any [NEEDS_SEARCH:] marker a non-compliant model may still
+        // emit, so the marker never reaches the client or the persisted history.
+        if (!ablation.isDynamicSearchEnabled()) {
+            return stripMarkerStream(firstStream).map(StreamChunk::token);
+        }
 
         return Flux.create(sink -> {
             AtomicBoolean replaced = new AtomicBoolean(false);
@@ -322,8 +333,12 @@ public class NeedsSearchLoopService {
     //-----------------------------------------------------
     //Function used in non-streaming solve() function from AiEngine.java
     //------------------------------------------------------
-    public DynamicRagResult dynamicRagLoopFunction(String conversationId, String assistantText, 
+    public DynamicRagResult dynamicRagLoopFunction(String conversationId, String assistantText,
                                         List<Map<String, String>> messages){
+        // Ablation switch: dynamic search disabled -> no second pass; strip any residual marker.
+        if (!ablation.isDynamicSearchEnabled()) {
+            return new DynamicRagResult(stripSearchMarkers(assistantText), null);
+        }
         List<String> dynamicSourceUrls = null;
         if (assistantText.contains("[NEEDS_SEARCH:")) {
             metrics.recordNeedsSearchTrigger();

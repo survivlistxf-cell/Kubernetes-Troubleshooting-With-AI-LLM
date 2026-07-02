@@ -1,0 +1,31 @@
+# RBAC read-only pentru Kubexplain.
+# Creeaza un ServiceAccount care poate DOAR sa citeasca din cluster (get/list/watch).
+# Aplica-l cu drepturi de admin pe clusterul tinta:
+#   kubectl apply -f rbac-readonly.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubexplain-readonly
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubexplain-readonly
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubexplain-readonly
+subjects:
+  - kind: ServiceAccount
+    name: kubexplain-readonly
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: kubexplain-readonly
+  apiGroup: rbac.authorization.k8s.io

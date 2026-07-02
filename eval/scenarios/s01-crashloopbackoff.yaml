@@ -1,0 +1,14 @@
+# S01 — CrashLoopBackOff: containerul iese imediat cu cod 1.
+# Cauza așteptată: aplicația cade la pornire (comandă/imagine greșită).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s01-crashloop
+  namespace: kubexplain-eval
+  labels: { eval-scenario: s01 }
+spec:
+  restartPolicy: Always
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["sh", "-c", "echo 'fatal: missing configuration'; exit 1"]

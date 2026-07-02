@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kdiag.server.ai.helpers.BudgetComputing;
+import com.kdiag.server.config.AblationConfig;
 import com.kdiag.server.llm.GptChatClient;
 
 /**
@@ -34,9 +35,35 @@ import com.kdiag.server.llm.GptChatClient;
 public class RuntimeConfigController {
 
     private final GptChatClient gpt;
+    private final AblationConfig ablation;
 
-    public RuntimeConfigController(GptChatClient gpt) {
+    public RuntimeConfigController(GptChatClient gpt, AblationConfig ablation) {
         this.gpt = gpt;
+        this.ablation = ablation;
+    }
+
+    /**
+     * Returns the current RAG ablation mode ({@code none | static | dynamic})
+     * together with the two underlying flags.
+     */
+    @GetMapping("/rag-mode")
+    public Map<String, Object> ragMode() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("mode", ablation.mode());
+        m.put("ragEnabled", ablation.isRagEnabled());
+        m.put("dynamicSearchEnabled", ablation.isDynamicSearchEnabled());
+        return m;
+    }
+
+    /**
+     * Switches the RAG ablation mode at runtime (no restart), mirroring the
+     * {@code num_ctx} benchmarking flow. Accepted values: {@code none}, {@code static},
+     * {@code dynamic}.
+     */
+    @PostMapping("/rag-mode")
+    public Map<String, Object> setRagMode(@RequestParam String value) {
+        ablation.setMode(value);
+        return ragMode();
     }
 
     /** Switches num_ctx at runtime and returns the recomputed budget. */

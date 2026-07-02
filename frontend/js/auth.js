@@ -70,6 +70,7 @@ async function handleLoginSubmit(ev) {
     if (data?.userId != null) localStorage.setItem('userId', String(data.userId));
 
     updateUIAfterLogin(data?.username || data?.email || 'User');
+    window.dispatchEvent(new CustomEvent('auth:login'));
     closeAuthModal();
     loadChatHistoryIntoTab();
   } catch (e) {
@@ -143,6 +144,13 @@ export function initAuth() {
     localStorage.removeItem('userId');
     updateUIAfterLogout();
     location.reload();
+  });
+
+  // Fired by api.js when the backend answers 401 (missing/expired JWT): the stored
+  // session was already cleared there, so just flip the UI and ask for a re-login.
+  window.addEventListener('auth:expired', () => {
+    updateUIAfterLogout();
+    openLoginModal();
   });
 
   // Expose for inline onclick in index.html

@@ -1,0 +1,20 @@
+# S08 — Liveness probe greșită: nginx servește pe 80, proba verifică 8081.
+# Simptom: reporniri repetate deși aplicația e sănătoasă.
+# Cauza așteptată: se corectează portul probei.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s08-bad-liveness
+  namespace: kubexplain-eval
+  labels: { eval-scenario: s08 }
+spec:
+  restartPolicy: Always
+  containers:
+    - name: web
+      image: nginx:1.25
+      ports: [{ containerPort: 80 }]
+      livenessProbe:
+        httpGet: { path: /, port: 8081 }
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 2

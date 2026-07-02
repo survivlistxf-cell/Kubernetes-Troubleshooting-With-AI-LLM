@@ -71,7 +71,8 @@ class StreamChunkFlowTest {
     @BeforeEach
     void setUp() {
         aiEngine = new AiEngine(gptClient, docsScraper,
-                 feedbackRetrievalService, metrics, needsSearchLoop, conversationSummary, solveService);
+                 feedbackRetrievalService, metrics, needsSearchLoop, conversationSummary, solveService,
+                 new com.kdiag.server.config.AblationConfig(true, true));
 
         // Common stubs required by solveStream's synchronous setup phase.
         when(gptClient.getNumCtx()).thenReturn(4096);

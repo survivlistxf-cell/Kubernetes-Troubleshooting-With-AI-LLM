@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { escapeHtml, getOrCreateConversationId } from './utils.js';
-import { postChat } from './api.js';
+import { postChat, authHeaders } from './api.js';
 import { hideWelcomeHeader, autoCollapseSidebar } from './navigation.js';
 import { renderChatAttachmentsHtml, bindChatAttachmentClicks, clearDraftAttachments } from './attachments.js';
 import { loadChatHistoryIntoTab } from './history.js';
@@ -426,7 +426,7 @@ async function sendMessageStreaming(text, attachments, conversationId) {
 
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(payload),
     signal: controller.signal,
   });
@@ -685,7 +685,7 @@ export function submitFeedback(score, clickedBtn, otherBtn) {
 
   fetch(`/api/chat/conversation/${currentConvId}/feedback`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ score })
   })
   .then(res => {

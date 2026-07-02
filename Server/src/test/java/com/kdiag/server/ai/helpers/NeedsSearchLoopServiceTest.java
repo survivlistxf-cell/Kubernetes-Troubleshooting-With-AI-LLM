@@ -57,7 +57,8 @@ class NeedsSearchLoopServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new NeedsSearchLoopService(gpt, dynamicSearcher, metrics);
+        service = new NeedsSearchLoopService(gpt, dynamicSearcher, metrics,
+                new com.kdiag.server.config.AblationConfig(true, true));
         when(gpt.budgetInputChars()).thenReturn(12000);
     }
 

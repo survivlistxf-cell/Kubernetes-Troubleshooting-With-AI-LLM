@@ -28,6 +28,16 @@ public class PromptsBuilder {
         "- Emit the marker at most ONCE.\n";
 
     /**
+     * Replacement for {@link #NEEDS_SEARCH_CONTRACT} when dynamic search is disabled
+     * (ablation modes "none"/"static"). Explicitly forbids the marker so the model does
+     * not emit it into a pipeline that will simply strip it.
+     */
+    private static final String NO_DYNAMIC_SEARCH_CONTRACT =
+        "DYNAMIC SEARCH: not available in this deployment. NEVER output a [NEEDS_SEARCH: ...] " +
+        "marker or mention any search mechanism. Answer directly from the context provided " +
+        "and your general knowledge.\n";
+
+    /**
      * Output-quality rules appended to every system prompt. These curb gpt-oss's tendency to answer
      * meta-questions about its own tooling and documents instead of the user's actual question.
      */
@@ -93,7 +103,11 @@ public class PromptsBuilder {
                                      List<String> evictedLabels,
                                      BudgetComputing.ArtifactBudget budget,
                                      boolean isFirstTurn,
-                                     int  budgetInputChars) {
+                                     int  budgetInputChars,
+                                     boolean dynamicSearchAllowed) {
+        final String searchContract = dynamicSearchAllowed
+                ? NEEDS_SEARCH_CONTRACT
+                : NO_DYNAMIC_SEARCH_CONTRACT;
         StringBuilder sb = new StringBuilder();
 
         if (isFirstTurn) {
@@ -104,7 +118,7 @@ public class PromptsBuilder {
                     "- If user asks to 'stop commands', 'no commands', or 'without commands': analyze only, suggest NO kubectl commands\n");
             sb.append("- If user provides error messages or logs: explain what they mean\n");
             sb.append("- Focus on understanding the problem first, not just solutions\n");
-            sb.append(NEEDS_SEARCH_CONTRACT);
+            sb.append(searchContract);
             sb.append(OUTPUT_HYGIENE);
             sb.append(FORMATTING_RULES);
             sb.append(TRUNCATION_NOTICE);
@@ -112,7 +126,7 @@ public class PromptsBuilder {
         } else {
             sb.append("You are Kubexplain, the Kubernetes diagnostic assistant. Continue this conversation " +
                 "applying the same conventions established earlier: structure responses in readable markdown.\n\n");
-            sb.append(NEEDS_SEARCH_CONTRACT);
+            sb.append(searchContract);
             sb.append(OUTPUT_HYGIENE);
             sb.append(FORMATTING_RULES);
             sb.append(TRUNCATION_NOTICE);
@@ -170,8 +184,10 @@ public class PromptsBuilder {
         if (hasAnyContext) {
             sb.append("Cite ONLY URLs that appear verbatim in the context above. Never invent or guess links.\n");
         } else {
-            sb.append("No documentation is available. Do NOT include any links or a 'References'/'Sources' section. " +
-                "Either answer from general knowledge clearly labeled as such, or emit a [NEEDS_SEARCH: ...] marker as described above.\n");
+            sb.append("No documentation is available. Do NOT include any links or a 'References'/'Sources' section. ");
+            sb.append(dynamicSearchAllowed
+                ? "Either answer from general knowledge clearly labeled as such, or emit a [NEEDS_SEARCH: ...] marker as described above.\n"
+                : "Answer from general knowledge clearly labeled as such.\n");
         }
 
         return sb.toString();

@@ -28,9 +28,9 @@ class DynamicPageCleanupServiceTest {
     @BeforeEach
     void setUp() {
         service = new DynamicPageCleanupService(pageRepo, chunkRetriever, metrics);
-        ReflectionTestUtils.setField(service, "enabled", true);
-        ReflectionTestUtils.setField(service, "ageDays",  30);
-        ReflectionTestUtils.setField(service, "dryRun",   false);
+        ReflectionTestUtils.setField(service, "enabled",       true);
+        ReflectionTestUtils.setField(service, "retentionDays", 30);
+        ReflectionTestUtils.setField(service, "dryRun",        false);
     }
 
     // -----------------------------------------------------------------------
@@ -110,5 +110,65 @@ class DynamicPageCleanupServiceTest {
         service.scheduledCleanup();
 
         verifyNoInteractions(pageRepo, chunkRetriever, metrics);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 5: retention disabled (retention-days <= 0) — cleanup is a no-op,
+    //         the DB is never queried/deleted and no metrics are recorded.
+    //         This is the default, air-gapped-friendly behavior.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void retentionDisabled_keepsEverything_noOp() {
+        ReflectionTestUtils.setField(service, "retentionDays", -1);
+
+        DynamicPageCleanupService.CleanupResult result = service.runCleanup(false);
+
+        // Nothing is queried, nothing deleted, no GC, no metrics recorded.
+        verifyNoInteractions(pageRepo, chunkRetriever, metrics);
+        assertEquals(0, result.candidates());
+        assertEquals(0, result.deleted());
+        assertEquals(-1, result.retentionDays());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 6: retention disabled via scheduled run — also a no-op even when
+    //         the global 'enabled' flag is true.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void retentionDisabled_scheduledRun_noOp() {
+        ReflectionTestUtils.setField(service, "retentionDays", 0);
+
+        service.scheduledCleanup();
+
+        verifyNoInteractions(pageRepo, chunkRetriever, metrics);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 7: retention enabled with a positive threshold — stale dynamic
+    //         pages older than the cutoff are deleted and the index GC runs.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void retentionEnabled_withThreshold_deletesStalePages() {
+        ReflectionTestUtils.setField(service, "retentionDays", 30);
+        List<Object[]> fakeCandidates = List.of(
+                new Object[]{100L, "https://kubernetes.io/docs/old-a"},
+                new Object[]{200L, "https://kubernetes.io/docs/old-b"}
+        );
+        when(pageRepo.findStaleDynamicPages(any())).thenReturn(fakeCandidates);
+        when(pageRepo.deleteByIds(any())).thenReturn(2);
+        when(chunkRetriever.forceGarbageCollect()).thenReturn(40);
+
+        DynamicPageCleanupService.CleanupResult result = service.runCleanup(false);
+
+        verify(pageRepo).findStaleDynamicPages(any());
+        verify(pageRepo).deleteByIds(List.of(100L, 200L));
+        verify(chunkRetriever).forceGarbageCollect();
+        verify(metrics).recordCleanupRun(eq(2), anyLong(), eq(false));
+        assertEquals(2, result.candidates());
+        assertEquals(2, result.deleted());
+        assertEquals(30, result.retentionDays());
     }
 }

@@ -2,7 +2,11 @@ package com.example.controllers;
 
 import com.example.entities.ClusterConfig;
 import com.example.repositories.ClusterConfigRepository;
+import com.example.services.KubeconfigPermissionChecker;
 import com.example.services.KubectlService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -19,15 +23,33 @@ import java.util.*;
 @CrossOrigin(origins = "*", allowedHeaders = "*")
 public class ClusterController {
 
+    private static final Logger logger = LoggerFactory.getLogger(ClusterController.class);
+
+    /** Recommendation surfaced to the UI when a kubeconfig is over-privileged. */
+    private static final String READONLY_SA_RECOMMENDATION =
+            "Provide a kubeconfig bound to a read-only ServiceAccount (RBAC with get/list/watch only).";
+
     private final ClusterConfigRepository clusterRepo;
     private final KubectlService kubectl;
+    private final KubeconfigPermissionChecker permissionChecker;
+
+    /**
+     * When true (default), adding a cluster whose kubeconfig can perform write
+     * operations is rejected. When false, the cluster is still added but the API
+     * response carries an explicit over-privileged warning.
+     */
+    @Value("${kubexplain.cluster.enforce-readonly-kubeconfig:false}")
+    private boolean enforceReadOnly;
 
     /** Directory where uploaded kubeconfig files are stored */
     private final Path kubeconfigStorageDir;
 
-    public ClusterController(ClusterConfigRepository clusterRepo, KubectlService kubectl) {
+    public ClusterController(ClusterConfigRepository clusterRepo,
+                             KubectlService kubectl,
+                             KubeconfigPermissionChecker permissionChecker) {
         this.clusterRepo = clusterRepo;
         this.kubectl = kubectl;
+        this.permissionChecker = permissionChecker;
 
         // Store kubeconfigs in ~/.kube/kubexplain/
         String userHome = System.getProperty("user.home");
@@ -85,6 +107,31 @@ public class ClusterController {
             Path targetPath = kubeconfigStorageDir.resolve(safeFilename);
             kubeconfigFile.transferTo(targetPath.toFile());
 
+            String ctx = contextName != null && !contextName.isBlank() ? contextName.trim() : null;
+
+            // Audit the kubeconfig: it must only grant read access. This runs
+            // `auth can-i <write-verb> <resource> -A` (a safe, read-only probe).
+            KubeconfigPermissionChecker.AuditResult audit =
+                    permissionChecker.audit(targetPath.toAbsolutePath().toString(), ctx);
+
+            if (!audit.readOnly() && enforceReadOnly) {
+                // Over-privileged kubeconfig and enforcement is on: reject + clean up the file.
+                try {
+                    Files.deleteIfExists(targetPath);
+                } catch (IOException cleanup) {
+                    logger.warn("Could not delete rejected kubeconfig '{}': {}", targetPath, cleanup.getMessage());
+                }
+                logger.warn("Rejected cluster '{}': over-privileged kubeconfig allows {}",
+                        name.trim(), audit.allowedWrites());
+
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("error", "Kubeconfig is over-privileged: it can perform write operations.");
+                body.put("readOnly", false);
+                body.put("allowedWriteOperations", audit.allowedWrites());
+                body.put("recommendation", READONLY_SA_RECOMMENDATION);
+                return ResponseEntity.unprocessableEntity().body(body);
+            }
+
             // If setting as default, clear other defaults
             if (isDefault) {
                 clearDefaultFlags();
@@ -95,16 +142,29 @@ public class ClusterController {
             config.setName(name.trim());
             config.setDisplayName(displayName != null && !displayName.isBlank() ? displayName.trim() : name.trim());
             config.setKubeconfigPath(targetPath.toAbsolutePath().toString());
-            config.setContextName(contextName != null && !contextName.isBlank() ? contextName.trim() : null);
+            config.setContextName(ctx);
             config.setDefaultNamespace(defaultNamespace != null && !defaultNamespace.isBlank() ? defaultNamespace.trim() : "default");
             config.setDefault(isDefault);
             config.setActive(true);
 
             ClusterConfig saved = clusterRepo.save(config);
 
-            return ResponseEntity.ok(Map.of(
-                    "message", "Cluster added successfully",
-                    "cluster", saved));
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("cluster", saved);
+            response.put("readOnly", audit.readOnly());
+            if (audit.readOnly()) {
+                logger.info("Cluster '{}' added; kubeconfig verified read-only", saved.getName());
+                response.put("message", "Cluster added successfully (read-only kubeconfig verified)");
+            } else {
+                // enforceReadOnly == false: accepted with an explicit warning.
+                logger.warn("Cluster '{}' added with OVER-PRIVILEGED kubeconfig (enforcement disabled); allows {}",
+                        saved.getName(), audit.allowedWrites());
+                response.put("message", "Cluster added, but the kubeconfig is over-privileged.");
+                response.put("warning", "This kubeconfig can perform write operations on the cluster.");
+                response.put("allowedWriteOperations", audit.allowedWrites());
+                response.put("recommendation", READONLY_SA_RECOMMENDATION);
+            }
+            return ResponseEntity.ok(response);
 
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of(

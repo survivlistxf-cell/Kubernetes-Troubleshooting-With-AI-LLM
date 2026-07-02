@@ -1,0 +1,20 @@
+# S13 (dinamic) — Job eșuat: comanda iese cu cod 1, backoffLimit: 2 →
+# condiția Failed, motiv BackoffLimitExceeded.
+# Scenariu destinat regăsirii DINAMICE: paginile despre Jobs sunt excluse din baza statică.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s13-failing-job
+  namespace: kubexplain-eval
+  labels: { eval-scenario: s13 }
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: { eval-scenario: s13 }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: task
+          image: busybox:1.36
+          command: ["sh", "-c", "echo 'processing batch...'; exit 1"]

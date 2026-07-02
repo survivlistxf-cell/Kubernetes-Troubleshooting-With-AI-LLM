@@ -1,0 +1,22 @@
+# S12 (dinamic) — HorizontalPodAutoscaler care nu poate scala: țintește un
+# Deployment inexistent → AbleToScale=False, "FailedGetScale".
+# Determinist indiferent dacă metrics-server există pe cluster.
+# Scenariu destinat regăsirii DINAMICE: paginile HPA sunt excluse din baza statică.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: s12-hpa
+  namespace: kubexplain-eval
+  labels: { eval-scenario: s12 }
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: deployment-care-nu-exista
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 50 }

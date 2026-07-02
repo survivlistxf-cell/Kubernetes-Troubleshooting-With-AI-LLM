@@ -2,6 +2,7 @@ package com.example.controllers;
 
 import com.example.entities.User;
 import com.example.repositories.UserRepository;
+import com.example.security.JwtService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -15,12 +16,15 @@ import java.util.Optional;
 @RequestMapping("/api/auth")
 @CrossOrigin(origins = "*", allowedHeaders = "*")
 public class AuthController {
-    
+
     @Autowired
     private UserRepository userRepository;
-    
+
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private JwtService jwtService;
     
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody Map<String, String> request) {
@@ -77,9 +81,11 @@ public class AuthController {
             return ResponseEntity.badRequest().body(Map.of("message", "Invalid email or password"));
         }
         
-        // Return success with user info (token should be JWT in production)
+        // Issue a signed JWT (subject = username, uid claim = user id).
+        String token = jwtService.generateToken(user.getId(), user.getUsername());
+
         Map<String, Object> response = new HashMap<>();
-        response.put("token", "token_" + user.getId() + "_" + System.currentTimeMillis());
+        response.put("token", token);
         response.put("username", user.getUsername());
         response.put("email", user.getEmail());
         response.put("userId", user.getId());

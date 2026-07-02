@@ -1,8 +1,31 @@
 import { API_URL } from './state.js';
 import { parseJsonSafely } from './utils.js';
 
+/**
+ * Returns the Authorization header for the current session (empty object when
+ * not logged in). The backend protects every /api/** route except auth/health
+ * with JWT, so all API calls must carry the Bearer token.
+ */
+export function authHeaders() {
+  const token = localStorage.getItem('authToken');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** Clears the stored session and lets the rest of the app react (show login). */
+function handleUnauthorized() {
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('currentUser');
+  localStorage.removeItem('userId');
+  window.dispatchEvent(new CustomEvent('auth:expired'));
+}
+
 async function fetchJson(url, opts = {}) {
-  const resp = await fetch(url, opts);
+  const merged = {
+    ...opts,
+    headers: { ...authHeaders(), ...(opts.headers || {}) },
+  };
+  const resp = await fetch(url, merged);
+  if (resp.status === 401 && !url.includes('/auth/')) handleUnauthorized();
   const data = await parseJsonSafely(resp);
   return { resp, data };
 }
@@ -69,6 +92,16 @@ export async function fetchAttachmentContent(id) {
   return fetchJson(`${API_URL}/chat/attachments/${encodeURIComponent(id)}/content`);
 }
 
+// ---- AI runtime configuration (RAG ablation mode) ----
+
+export async function getRagMode() {
+  return fetchJson(`${API_URL}/ai/rag-mode`);
+}
+
+export async function setRagMode(mode) {
+  return fetchJson(`${API_URL}/ai/rag-mode?value=${encodeURIComponent(mode)}`, { method: 'POST' });
+}
+
 // ---- Cluster management API ----
 
 export async function getClusters() {
@@ -80,7 +113,8 @@ export async function getClusters() {
 export async function addCluster(formData) {
   const resp = await fetch(`${API_URL}/clusters`, {
     method: 'POST',
-    body: formData, // multipart/form-data — no Content-Type header (browser sets boundary)
+    headers: authHeaders(), // no Content-Type — the browser sets the multipart boundary
+    body: formData,
   });
   const data = await parseJsonSafely(resp);
   return { resp, data };

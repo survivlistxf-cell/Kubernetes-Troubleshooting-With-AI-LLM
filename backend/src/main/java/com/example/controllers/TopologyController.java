@@ -26,7 +26,6 @@ import java.util.concurrent.TimeoutException;
  */
 @RestController
 @RequestMapping("/api/clusters")
-@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class TopologyController {
 
     private static final long COUNT_CACHE_TTL_MS = 30_000L;

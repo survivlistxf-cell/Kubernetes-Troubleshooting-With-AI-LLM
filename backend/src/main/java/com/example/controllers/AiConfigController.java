@@ -29,7 +29,6 @@ import java.util.Set;
  */
 @RestController
 @RequestMapping("/api/ai")
-@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class AiConfigController {
 
     private static final Logger logger = LoggerFactory.getLogger(AiConfigController.class);

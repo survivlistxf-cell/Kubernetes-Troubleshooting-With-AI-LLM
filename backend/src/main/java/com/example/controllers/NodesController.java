@@ -6,6 +6,8 @@ import com.example.services.KubectlService;
 import com.example.utils.Utils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -17,8 +19,9 @@ import java.util.concurrent.TimeoutException;
 
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class NodesController {
+
+    private static final Logger logger = LoggerFactory.getLogger(NodesController.class);
 
     private final KubectlService kubectl;
     private final ClusterConfigRepository clusterRepo;
@@ -102,7 +105,7 @@ public class NodesController {
             result.put("count", nodes.size());
 
         } catch (Exception e) {
-            System.err.println("Scan nodes error: " + e.getMessage());
+            logger.error("Scan nodes error: {}", e.getMessage(), e);
             result.put("error", "Error scanning nodes: " + e.getMessage());
             result.put("nodes", nodes);
             result.put("success", false);

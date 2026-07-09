@@ -8,6 +8,8 @@ import com.example.repositories.ChatRepository;
 import com.example.repositories.ConversationContextRepository;
 import com.example.repositories.ConversationRepository;
 import com.example.repositories.UserRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,6 +18,8 @@ import java.util.*;
 
 @Service
 public class ChatService {
+
+    private static final Logger logger = LoggerFactory.getLogger(ChatService.class);
 
     private final ChatRepository chatRepository;
     private final UserRepository userRepository;
@@ -66,7 +70,14 @@ public class ChatService {
             // jpa cauta in baza de date user-ul cu id-ul specificat
             // si il mapeaza pe variabila user din functia lambda
             // public interface UserRepository extends JpaRepository<User, Long>
-            userRepository.findById(userId).ifPresent(user -> {
+            Optional<User> userOpt = userRepository.findById(userId);
+            if (userOpt.isEmpty()) {
+                // Fara asta, un userId inexistent (ex. sesiune veche in localStorage dupa un
+                // reset de DB) ar "salva" silentios nimic, iar frontend-ul ar crede ca a reusit.
+                logger.warn("persistChat: userId {} not found in DB — chat NOT persisted (conv={})",
+                        userId, conv);
+            }
+            userOpt.ifPresent(user -> {
                 ensureConversation(user, conv, userMessage);
                 Chat chat = new Chat();
                 chat.setUser(user);
@@ -103,17 +114,9 @@ public class ChatService {
             result.put("attachments", attMetaRef.get()); // si aici
             return result;
         } catch (NumberFormatException e) {
-            System.err.println("Invalid userId for chat persistence: " + userIdValue);
+            logger.warn("Invalid userId for chat persistence: {}", userIdValue);
             return null;
         }
-    }
-
-    public Chat saveSimpleChat(User user, String userMessage, String aiResponse) {
-        Chat chat = new Chat();
-        chat.setUser(user);
-        chat.setUserMessage(userMessage);
-        chat.setAiResponse(aiResponse);
-        return chatRepository.save(chat);
     }
 
     public void updateFeedback(String conversationId, Integer score) {
@@ -149,7 +152,10 @@ public class ChatService {
             // daca este conversatie noua, o salvam in baza de date
             // daca deja exista, JPA doar ii da un update la timestamp
             conversationRepository.save(c);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            // Best-effort, dar nu tacut: o conversatie care nu s-a creat aici inseamna
+            // mesaje orfane in istoric — trebuie sa fie vizibil in loguri.
+            logger.warn("ensureConversation failed for conv={}: {}", conversationId, e.getMessage());
         }
     }
 
@@ -163,7 +169,8 @@ public class ChatService {
         try {
             conversationContextRepository.flush();
             chatRepository.flush();
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            logger.debug("deleteConversation flush failed for conv={}: {}", conversationId, e.getMessage());
         }
 
         if (conversationRepository.existsById(conversationId)) {
@@ -191,7 +198,8 @@ public class ChatService {
             if (chats != null && chats.size() == 1) {
                 regenerateTitle(conversationId, userId, requestId, false);
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            logger.debug("autoGenerateTitleIfNeeded failed for conv={}: {}", conversationId, e.getMessage());
         }
     }
 
@@ -225,14 +233,15 @@ public class ChatService {
             // ephemeral=true: the AI server ignores the conversationId so the title prompt
             // and generated title are never persisted to conversation history.
             AiForwardingService.ForwardResult forwardResult = aiForwardingService.forward(userId, conversationId, prompt, null, requestId, false, true);
-            String aiTitle = forwardResult != null ? forwardResult.text() : null;
-            if (aiForwardingService.isAiHttpError(aiTitle))
-                aiTitle = null;
+            String aiTitle = (forwardResult != null && !forwardResult.isError()) ? forwardResult.text() : null;
 
             String finalTitle;
             if (aiTitle == null || aiTitle.isBlank()) {
-                Collections.reverse(chatsDesc);
-                String firstUser = chatsDesc.stream()
+                // Copie: lista intoarsa de repository nu se muta in-place, ca o extindere
+                // ulterioara a metodei sa nu mosteneasca o ordine surpriza.
+                List<Chat> chatsAsc = new ArrayList<>(chatsDesc);
+                Collections.reverse(chatsAsc);
+                String firstUser = chatsAsc.stream()
                         .map(Chat::getUserMessage)
                         .filter(m -> m != null && !m.isBlank())
                         .findFirst().orElse(null);
@@ -249,6 +258,7 @@ public class ChatService {
             conversationRepository.save(conv);
             return finalTitle;
         } catch (Exception e) {
+            logger.debug("regenerateTitle failed for conv={}: {}", conversationId, e.getMessage());
             return null;
         }
     }
@@ -330,21 +340,6 @@ public class ChatService {
 
     public List<Chat> getChatHistory(User user) {
         return chatRepository.findByUserOrderByCreatedAtDesc(user);
-    }
-
-    // ── Fallback response ──
-
-    public String generateFallbackResponse(String message) {
-        String lower = message.toLowerCase();
-        if (lower.contains("kubernetes") || lower.contains("k8s"))
-            return "Kubernetes is an open-source container orchestration platform that automates deploying, managing, and scaling containerized applications.";
-        if (lower.contains("docker"))
-            return "Docker is a containerization platform that packages your application and all its dependencies into a container.";
-        if (lower.contains("hello") || lower.contains("hi"))
-            return "Hello! I'm Kubexplain, your AI assistant for Kubernetes and cloud infrastructure questions.";
-        if (lower.contains("help"))
-            return "I can help with Kubernetes, Docker, container orchestration, cloud infrastructure, and DevOps.";
-        return "That's an interesting question! Please try asking about Kubernetes, Docker, or cloud infrastructure.";
     }
 
     // ── Title derivation (static utility) ──

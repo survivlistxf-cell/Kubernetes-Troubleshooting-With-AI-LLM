@@ -15,7 +15,6 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class ContextController {
 
     @Autowired
@@ -50,6 +49,9 @@ public class ContextController {
                 if (uid == null)
                     uid = map.get("userId");
                 userIdValue = Utils.asString(uid);
+                // Token uid wins over the client-supplied value (IDOR prevention).
+                Long resolved = com.example.security.CurrentUser.resolve(userIdValue);
+                userIdValue = resolved != null ? String.valueOf(resolved) : null;
 
                 // Try to infer level from first artifact.level
                 Object artifacts = map.get("artifacts");

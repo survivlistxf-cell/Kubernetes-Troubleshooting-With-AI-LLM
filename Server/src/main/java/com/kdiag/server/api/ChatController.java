@@ -142,6 +142,7 @@ public class ChatController {
         resp.setConversation_id(conversationId);
         resp.setAssistant_message(new KdiagModels.AssistantMessage(result.getAssistantText()));
         resp.setActions_requested(mapActions(result));
+        resp.setSource_urls(result.getSourceUrls());
         return resp;
     }
 

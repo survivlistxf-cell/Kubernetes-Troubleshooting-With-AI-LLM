@@ -1,0 +1,44 @@
+# s11 | mode=none | run=3 | 15.7s | needs_search=0
+
+**Q:** I cannot create pod 's11-psa-violator' in namespace 'kubexplain-eval-psa'. What is the root cause and how do I fix it? I cannot access the cluster right now, so list the most likely causes in order of probability and explain how to verify and fix each one.
+
+**Expected:** Pod Security Admission 'restricted' rejects root/privilege-escalation; fix securityContext
+
+---
+
+## Most likely reasons a pod named **`s11-psa-violator`** cannot be created in the **`kubexplain-eval-psa`** namespace  
+
+| # | Likely cause | Why it is the most common in this situation | How you would verify it (when you have cluster access) | How to fix it |
+|---|--------------|---------------------------------------------|--------------------------------------------------------|---------------|
+| 1 | **PodSecurityAdmission (PSA) violation** | The pod name itself contains *psa‑violator*, which strongly hints that the pod’s spec breaks the namespace’s PSA level (e.g., it requests `privileged: true`, uses hostPath, runs as root, etc.). PSA is now the default admission controller in most clusters, so a mismatch will be rejected before any other checks are performed. | • Look at the namespace’s PSA label (`pod-security.kubernetes.io/enforce`). <br>• Examine the pod’s YAML for any of the restricted‑policy disallowed fields (privileged containers, host networking, host PID/IPC, hostPath volumes, `runAsUser: 0`, `allowPrivilegeEscalation: true`, etc.). <br>• The API server error message will contain “violates PodSecurityPolicy” or “failed PodSecurity admission check”. | • Modify the pod spec so it complies with the enforced level (e.g., remove `privileged: true`, drop hostPath, run as non‑root). <br>• If the workload truly needs those capabilities, lower the namespace’s PSA level (e.g., change the label to `baseline` or `privileged`) **or** add an exemption label (`pod-security.kubernetes.io/audit` / `warn` / `enforce` as appropriate) to the namespace or the pod. |
+| 2 | **Namespace‑level ResourceQuota exceeded** | Many evaluation namespaces are pre‑configured with a quota to limit total CPU, memory, pod count, etc. If the quota is already full, the API server will reject any new pod creation. | • Retrieve the `ResourceQuota` objects in the namespace and compare the used vs. hard values for `pods`, `cpu`, `memory`, etc. <br>• The error will say “exceeded quota: …”. | • Delete or scale down other resources (pods, jobs, etc.) to free quota. <br>• Request a larger quota from the cluster admin. |
+| 3 | **LimitRange preventing the pod’s resource requests/limits** | A `LimitRange` can enforce minimum/maximum CPU, memory, or require limits to be set. If the pod’s container spec falls outside those bounds, creation fails. | • List the `LimitRange` objects in the namespace and note the min/max values. <br>• Compare the pod’s `resources.requests` and `resources.limits` against those ranges. <br>• The error will mention “exceeds the limit range”. | • Adjust the pod’s resource requests/limits to fit within the allowed range. <br>• If the current limits are too restrictive for the workload, ask the admin to modify the `LimitRange`. |
+| 4 | **Admission webhook (e.g., OPA Gatekeeper, Kyverno) rejecting the pod** | Many clusters enforce custom policies via webhooks that can block pods for naming conventions, image registries, required labels, etc. A name like `s11-psa-violator` might deliberately trigger a policy that forbids “violator” in names. | • Check the `ValidatingWebhookConfiguration` objects that target pods. <br>• The API error will include the webhook name and a message such as “denied by policy XYZ”. | • Change the pod name or add the required labels/annotations to satisfy the policy. <br>• If the policy is too strict for this test, ask the policy owner to add an exemption or adjust the rule. |
+| 5 | **Node‑selector / taint‑toleration mismatch** | If the pod specifies a `nodeSelector` or `affinity` that does not match any available node, the scheduler will not place it, but the API server still creates the pod. However, some clusters have a mutating webhook that pre‑validates node selection and reject pods that cannot be scheduled. | • Review the pod’s `nodeSelector`, `nodeAffinity`, and any `tolerations`. <br>• Verify that at least one node in the cluster satisfies those constraints. <br>• Look for an error mentioning “no nodes match node selector”. | • Remove or relax the selector/affinity, or add the appropriate tolerations. <br>• Alternatively, label a node to match the selector. |
+| 6 | **Image pull secret / registry authentication failure** | If the pod references a private image and the namespace lacks a valid `imagePullSecret`, the API server may reject creation (some clusters enforce this early). | • Inspect the pod’s `imagePullSecrets` field and the referenced secret’s existence. <br>• The error will say “failed to resolve image …: secret … not found” or “unauthorized”. | • Create or update the `imagePullSecret` in the namespace. <br>• Ensure the pod references the correct secret name. |
+| 7 | **RBAC – the user/service‑account you are using lacks `create` permission on pods** | If you are trying to create the pod with a user that does not have `pods/create` permission in that namespace, the API server will reject the request outright. | • Attempt the creation and note the error: it will contain “forbidden: User … cannot create pods in namespace …”. | • Grant the appropriate `Role`/`ClusterRole` and `RoleBinding`/`ClusterRoleBinding` to the user or service‑account. |
+| 8 | **Pod name already exists** | Kubernetes does not allow two pods with the same name in a namespace. If a previous pod with that name is still present (perhaps in a terminating state), creation fails. | • List pods in the namespace and look for `s11-psa-violator`. <br>• The error will say “pods “s11-psa-violator” already exists”. | • Delete the existing pod (or wait for it to finish terminating). <br>• Use a different name if you need a fresh pod. |
+| 9 | **Namespace does not exist or is misspelled** | A typo in the namespace name will cause the API server to reject the request because it cannot find the target namespace. | • Verify the exact namespace name with `kubectl get ns`. <br>• The error will be “namespaces “kubexplain‑eval‑psa” not found”. | • Use the correct namespace name, or create the namespace if it should exist. |
+|10| **Cluster‑wide policy (e.g., PodSecurityPolicy, if still enabled) or other legacy admission controller** | Some clusters still run the older PSP controller, which can also block pods for similar reasons as PSA. | • Look for a `PodSecurityPolicy` that matches the pod’s service‑account. <br>• The error will reference “PodSecurityPolicy”. | • Adjust the PSP or the pod’s service‑account to satisfy the policy, or disable PSP if the cluster has moved to PSA. |
+
+---
+
+### How to verify each cause (when you regain access)
+
+1. **Check the error message** returned by the API server when you attempted `kubectl apply -f pod.yaml`. The message usually tells you which admission controller rejected the pod (e.g., “PodSecurity”, “resourcequota”, “validation webhook …”).  
+2. **Inspect the namespace**: look at its labels (`pod-security.kubernetes.io/*`), any `ResourceQuota` or `LimitRange` objects, and existing `ServiceAccount`/`imagePullSecret` resources.  
+3. **Review the pod spec**: focus on fields that commonly trigger policies – `securityContext`, `hostPath` volumes, `runAsUser`, `allowPrivilegeEscalation`, `nodeSelector`, `affinity`, `tolerations`, `imagePullSecrets`, and resource requests/limits.  
+4. **List admission controllers**: `kubectl get validatingwebhookconfigurations` and `mutatingwebhookconfigurations` to see if any custom policies apply to pods.  
+5. **Check RBAC**: run a `kubectl auth can-i create pod --namespace=kubexplain-eval-psa` with the same identity you used for creation.  
+
+---
+
+### General remediation steps
+
+1. **Make the pod compliant** – adjust the YAML to satisfy the most restrictive policy that is actually required for the workload.  
+2. **Adjust the policy** – if the workload legitimately needs the disallowed capability, lower the namespace’s PSA level, increase the quota, relax the `LimitRange`, or add an exemption to the webhook rule.  
+3. **Fix supporting resources** – ensure the correct `ServiceAccount`, `imagePullSecret`, node labels/taints, and that the user has proper RBAC rights.  
+4. **Clean up conflicts** – delete any existing pod with the same name, or wait for termination.  
+5. **Confirm** – after making changes, re‑run the pod creation and verify that the API server accepts it (no error message).  
+
+By following the verification steps in the order above, you’ll quickly pinpoint which of these common blockers is responsible for the failure and apply the appropriate fix. Good luck!

@@ -11,7 +11,6 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/cluster-links")
-@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class ClusterLinkController {
 
     private final ClusterLinkRepository linkRepo;

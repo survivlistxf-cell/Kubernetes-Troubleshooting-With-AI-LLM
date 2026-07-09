@@ -80,7 +80,7 @@ public class ElasticChunkRetriever implements ChunkRetriever {
      * 0.85 ≈ cosine 0.70 for nomic-embed-text. Runtime-tunable via
      * {@code POST /v1/config/min-relevance} (no restart), 0 disables the gate.
      */
-    @Value("${kdiag.retrieval.min-relevance:0.85}")
+    @Value("${kdiag.retrieval.min-relevance:0.83}")
     private volatile double minRelevance;
 
     /** RRF rank constant (k); 60 is the standard default also used by Elasticsearch's native rrf. */

@@ -1,0 +1,279 @@
+{
+  "_descriere": "Catalogul testelor reale pe aplicația e-learning (namespace 'elearning'). T01–T11 = Teste.docx; T12 (504) și T13 (404) = sugestii.docx. Comenzile break/fix sunt PowerShell și se rulează MANUAL de operator — scriptul doar le afișează. $K = kubectl --kubeconfig $HOME\\.kube\\licenta-cluster.yaml",
+  "app_url": "http://203.25.143.55",
+  "cases": [
+    {
+      "id": "t01",
+      "title": "Backend CrashLoopBackOff — parolă DB greșită",
+      "break": [
+        "$K -n elearning set env deploy/backend SPRING_DATASOURCE_PASSWORD=pswd",
+        "$K -n elearning rollout restart deploy/backend"
+      ],
+      "fix": [
+        "$K -n elearning set env deploy/backend SPRING_DATASOURCE_PASSWORD=p0stgr3s2025!",
+        "$K -n elearning rollout restart deploy/backend"
+      ],
+      "question": "After a redeploy of my e-learning platform, the backend pod in namespace 'elearning' keeps restarting (CrashLoopBackOff). What is the root cause and how do I fix it?",
+      "expected": "backend nu se poate autentifica la Postgres (SPRING_DATASOURCE_PASSWORD greșit); corectarea credențialei + restart",
+      "evidence": {
+        "2": [{"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning", "-o", "wide"]},
+              {"type": "logs", "target": "deploy/elearning/backend", "kubectl": ["logs", "-n", "elearning", "-l", "app=backend", "--tail=150"]}],
+        "3": [{"type": "pod_describe", "target": "deploy/elearning/backend", "kubectl": ["describe", "pod", "-n", "elearning", "-l", "app=backend"]}],
+        "4": [{"type": "logs_previous", "target": "deploy/elearning/backend", "kubectl": ["logs", "-n", "elearning", "-l", "app=backend", "--previous", "--tail=100"]}]
+      }
+    },
+    {
+      "id": "t02",
+      "title": "Frontend ImagePullBackOff — imagine inexistentă",
+      "break": [
+        "$K -n elearning set image deploy/frontend frontend=axiiiiiiii/platforma-e-learning:frontend_1"
+      ],
+      "fix": [
+        "$K -n elearning set image deploy/frontend frontend=axiiiiiiii/platforma-e-learning:frontend",
+        "$K -n elearning rollout status deploy/frontend"
+      ],
+      "question": "I updated the frontend of my e-learning application and now the new frontend pod in namespace 'elearning' never becomes Ready. What is wrong?",
+      "expected": "imaginea nu poate fi descărcată (tag inexistent 'frontend_1' → ImagePullBackOff); corectarea referinței imaginii",
+      "evidence": {
+        "2": [{"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning", "-o", "wide"]}],
+        "3": [{"type": "pod_describe", "target": "deploy/elearning/frontend", "kubectl": ["describe", "pod", "-n", "elearning", "-l", "app=frontend"]}],
+        "4": [{"type": "events", "target": "ns/elearning", "kubectl": ["get", "events", "-n", "elearning", "--sort-by=.lastTimestamp"]}]
+      }
+    },
+    {
+      "id": "t03",
+      "title": "Postgres Pending — nodeSelector invalid",
+      "break": [
+        "Set-Content -Path patch-add.json -Value '[{\"op\":\"add\",\"path\":\"/spec/template/spec/nodeSelector\",\"value\":{\"kubernetes.io/hostname\":\"nodeeee\"}}]'",
+        "$K -n elearning patch statefulset postgres --type=\"json\" --patch-file patch-add.json",
+        "$K -n elearning delete pod postgres-0"
+      ],
+      "fix": [
+        "Set-Content -Path patch-remove.json -Value '[{\"op\":\"remove\",\"path\":\"/spec/template/spec/nodeSelector\"}]'",
+        "$K -n elearning patch statefulset postgres --type=\"json\" --patch-file patch-remove.json"
+      ],
+      "question": "The database pod 'postgres-0' of my e-learning application in namespace 'elearning' is stuck in Pending after a change and the application cannot reach the database. Why?",
+      "expected": "nodeSelector cere un nod inexistent ('nodeeee') → FailedScheduling; eliminarea/corectarea nodeSelector",
+      "evidence": {
+        "2": [{"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning", "-o", "wide"]},
+              {"type": "nodes", "target": "cluster/nodes", "kubectl": ["get", "nodes"]}],
+        "3": [{"type": "pod_describe", "target": "pod/elearning/postgres-0", "kubectl": ["describe", "pod", "postgres-0", "-n", "elearning"]}],
+        "4": [{"type": "events", "target": "ns/elearning", "kubectl": ["get", "events", "-n", "elearning", "--sort-by=.lastTimestamp"]}]
+      }
+    },
+    {
+      "id": "t04",
+      "title": "PVC Pending — StorageClass inexistent",
+      "warning": "DISTRUCTIV: șterge StatefulSet-ul și PVC-ul Postgres → PIERZI datele din baza e-learning. Rulează-l penultimul, înainte de t10.",
+      "break": [
+        "$K -n elearning delete statefulset postgres",
+        "$K -n elearning delete pvc pgdata-pvc",
+        "# editează manifestul PVC/volumeClaimTemplates: storageClassName: manuale",
+        "$K apply -n elearning -f k8s/"
+      ],
+      "fix": [
+        "$K -n elearning delete statefulset postgres",
+        "$K -n elearning delete pvc pgdata-pvc",
+        "# editează înapoi manifestul: storageClassName: manual",
+        "$K apply -n elearning -f k8s/"
+      ],
+      "question": "I redeployed the database of my e-learning application and now the Postgres pod in namespace 'elearning' stays Pending and its PersistentVolumeClaim is never bound. What is the root cause?",
+      "expected": "PVC referă un StorageClass inexistent ('manuale') → nu se poate face provisioning; corectarea storageClassName ('manual')",
+      "evidence": {
+        "2": [{"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning"]},
+              {"type": "pvc_overview", "target": "ns/elearning", "kubectl": ["get", "pvc", "-n", "elearning"]}],
+        "3": [{"type": "pvc_describe", "target": "pvc/elearning/pgdata-pvc", "kubectl": ["describe", "pvc", "pgdata-pvc", "-n", "elearning"]}],
+        "4": [{"type": "storageclasses", "target": "cluster/storageclass", "kubectl": ["get", "storageclass"]},
+              {"type": "events", "target": "ns/elearning", "kubectl": ["get", "events", "-n", "elearning", "--sort-by=.lastTimestamp"]}]
+      }
+    },
+    {
+      "id": "t05",
+      "title": "FailedMount — ConfigMap lipsă",
+      "break": [
+        "$K -n elearning delete configmap backend-dotenv",
+        "$K -n elearning rollout restart deploy/backend"
+      ],
+      "fix": [
+        "$K apply -n elearning -f k8s/backend-deploy.yaml",
+        "$K -n elearning rollout restart deploy/backend"
+      ],
+      "question": "After a restart, the backend pod of my e-learning application in namespace 'elearning' is stuck in ContainerCreating and never starts. What is wrong?",
+      "expected": "ConfigMap-ul montat 'backend-dotenv' lipsește → FailedMount; recrearea ConfigMap-ului",
+      "evidence": {
+        "2": [{"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning"]}],
+        "3": [{"type": "pod_describe", "target": "deploy/elearning/backend", "kubectl": ["describe", "pod", "-n", "elearning", "-l", "app=backend"]}],
+        "4": [{"type": "configmaps", "target": "ns/elearning", "kubectl": ["get", "configmap", "-n", "elearning"]},
+              {"type": "events", "target": "ns/elearning", "kubectl": ["get", "events", "-n", "elearning", "--sort-by=.lastTimestamp"]}]
+      }
+    },
+    {
+      "id": "t06",
+      "title": "Ingress 503 — Service fără endpoints",
+      "break": [
+        "Set-Content -Path patch-svc-break.json -Value '[{\"op\":\"replace\",\"path\":\"/spec/selector/app\",\"value\":\"backendX\"}]'",
+        "$K -n elearning patch svc backend --type=\"json\" --patch-file patch-svc-break.json"
+      ],
+      "fix": [
+        "Set-Content -Path patch-svc-fix.json -Value '[{\"op\":\"replace\",\"path\":\"/spec/selector/app\",\"value\":\"backend\"}]'",
+        "$K -n elearning patch svc backend --type=\"json\" --patch-file patch-svc-fix.json"
+      ],
+      "question": "The API of my e-learning site suddenly returns 503 Service Temporarily Unavailable through the ingress, although all pods in namespace 'elearning' are Running and healthy. What is the root cause?",
+      "expected": "selectorul Service-ului backend nu se potrivește cu label-urile podurilor ('backendX') → zero endpoints → 503; corectarea selectorului",
+      "evidence": {
+        "2": [{"type": "http_response", "target": "GET /api/", "http_path": "/api/"},
+              {"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning", "--show-labels"]}],
+        "3": [{"type": "endpoints", "target": "svc/elearning/backend", "kubectl": ["get", "endpoints", "backend", "-n", "elearning", "-o", "yaml"]}],
+        "4": [{"type": "svc_yaml", "target": "svc/elearning/backend", "kubectl": ["get", "svc", "backend", "-n", "elearning", "-o", "yaml"]},
+              {"type": "ingress_describe", "target": "ingress/elearning", "kubectl": ["describe", "ingress", "-n", "elearning"]}]
+      }
+    },
+    {
+      "id": "t07",
+      "title": "DNS — Service name greșit (postgresX)",
+      "break": [
+        "$K -n elearning set env deploy/backend SPRING_DATASOURCE_URL=\"jdbc:postgresql://postgresX:5432/ELearning_db\"",
+        "$K -n elearning rollout restart deploy/backend"
+      ],
+      "fix": [
+        "$K -n elearning set env deploy/backend SPRING_DATASOURCE_URL=\"jdbc:postgresql://postgres:5432/ELearning_db\"",
+        "$K -n elearning rollout restart deploy/backend"
+      ],
+      "question": "After a configuration change, the backend pod of my e-learning application in namespace 'elearning' keeps crashing at startup. What is the root cause?",
+      "expected": "host-ul DB 'postgresX' nu se rezolvă în DNS (UnknownHostException); corectarea numelui serviciului în JDBC URL",
+      "evidence": {
+        "2": [{"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning"]},
+              {"type": "logs", "target": "deploy/elearning/backend", "kubectl": ["logs", "-n", "elearning", "-l", "app=backend", "--tail=150"]}],
+        "3": [{"type": "pod_describe", "target": "deploy/elearning/backend", "kubectl": ["describe", "pod", "-n", "elearning", "-l", "app=backend"]}],
+        "4": [{"type": "events", "target": "ns/elearning", "kubectl": ["get", "events", "-n", "elearning", "--sort-by=.lastTimestamp"]}]
+      }
+    },
+    {
+      "id": "t08",
+      "title": "OOMKilled — limită de memorie prea mică",
+      "break": [
+        "Set-Content -Path patch-oom.json -Value '[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/resources\",\"value\":{\"limits\":{\"memory\":\"64Mi\"},\"requests\":{\"memory\":\"64Mi\"}}}]'",
+        "$K -n elearning patch deploy/backend --type=\"json\" --patch-file patch-oom.json",
+        "$K -n elearning rollout restart deploy/backend"
+      ],
+      "fix": [
+        "Set-Content -Path patch-oom-fix.json -Value '[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/resources/limits/memory\",\"value\":\"512Mi\"},{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/resources/requests/memory\",\"value\":\"256Mi\"}]'",
+        "$K -n elearning patch deploy/backend --type=\"json\" --patch-file patch-oom-fix.json",
+        "$K -n elearning rollout restart deploy/backend"
+      ],
+      "question": "The backend pod of my e-learning application in namespace 'elearning' keeps getting killed and restarted every few minutes. Why?",
+      "expected": "container OOMKilled (exit 137) — limita de memorie 64Mi e sub necesarul JVM; mărirea limits.memory",
+      "evidence": {
+        "2": [{"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning"]},
+              {"type": "logs_previous", "target": "deploy/elearning/backend", "kubectl": ["logs", "-n", "elearning", "-l", "app=backend", "--previous", "--tail=100"]}],
+        "3": [{"type": "pod_describe", "target": "deploy/elearning/backend", "kubectl": ["describe", "pod", "-n", "elearning", "-l", "app=backend"]}],
+        "4": [{"type": "events", "target": "ns/elearning", "kubectl": ["get", "events", "-n", "elearning", "--sort-by=.lastTimestamp"]}]
+      }
+    },
+    {
+      "id": "t09",
+      "title": "Frontend CrashLoopBackOff — config Nginx invalid",
+      "break": [
+        "$K -n elearning edit configmap frontend-nginx-conf   # pune: listen abc;",
+        "$K -n elearning rollout restart deploy/frontend"
+      ],
+      "fix": [
+        "$K -n elearning edit configmap frontend-nginx-conf   # pune înapoi: listen 80;",
+        "$K -n elearning rollout restart deploy/frontend"
+      ],
+      "question": "After changing the web server configuration, the frontend pod of my e-learning application in namespace 'elearning' is in CrashLoopBackOff. What is the root cause?",
+      "expected": "directivă nginx invalidă ('listen abc') în ConfigMap → nginx nu pornește; corectarea directivei",
+      "evidence": {
+        "2": [{"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning"]},
+              {"type": "logs", "target": "deploy/elearning/frontend", "kubectl": ["logs", "-n", "elearning", "-l", "app=frontend", "--tail=100"]}],
+        "3": [{"type": "pod_describe", "target": "deploy/elearning/frontend", "kubectl": ["describe", "pod", "-n", "elearning", "-l", "app=frontend"]}],
+        "4": [{"type": "configmap_yaml", "target": "cm/elearning/frontend-nginx-conf", "kubectl": ["get", "configmap", "frontend-nginx-conf", "-n", "elearning", "-o", "yaml"]}]
+      }
+    },
+    {
+      "id": "t10",
+      "title": "Postgres init.sql eșuează la bootstrap",
+      "warning": "Funcționează DOAR cu baza de date goală (init.sql rulează numai la prima inițializare). Rulează-l ultimul, imediat după t04 (care lasă DB-ul proaspăt).",
+      "break": [
+        "$K -n elearning edit configmap postgres-init-sql   # introdu eroare: CREATEE TABLE ...",
+        "$K -n elearning delete pod postgres-0"
+      ],
+      "fix": [
+        "$K -n elearning edit configmap postgres-init-sql   # corectează înapoi: CREATE TABLE ...",
+        "$K -n elearning delete statefulset postgres",
+        "$K -n elearning delete pvc pgdata-pvc",
+        "$K apply -n elearning -f k8s/"
+      ],
+      "question": "I deployed a fresh Postgres instance for my e-learning application in namespace 'elearning' but the pod keeps failing during database initialization. What is the root cause?",
+      "expected": "eroare de sintaxă SQL în init.sql executat la bootstrap → initdb eșuează; corectarea scriptului și reinițializarea",
+      "evidence": {
+        "2": [{"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning"]},
+              {"type": "logs", "target": "pod/elearning/postgres-0", "kubectl": ["logs", "postgres-0", "-n", "elearning", "--tail=300"]}],
+        "3": [{"type": "pod_describe", "target": "pod/elearning/postgres-0", "kubectl": ["describe", "pod", "postgres-0", "-n", "elearning"]}],
+        "4": [{"type": "configmap_yaml", "target": "cm/elearning/postgres-init-sql", "kubectl": ["get", "configmap", "postgres-init-sql", "-n", "elearning", "-o", "yaml"]}]
+      }
+    },
+    {
+      "id": "t11",
+      "title": "Ingress — /api/ rutat greșit către frontend",
+      "break": [
+        "Set-Content -Path patch-ingress.json -Value '[{\"op\":\"replace\",\"path\":\"/spec/rules/0/http/paths/1/backend/service/name\",\"value\":\"frontend\"}]'",
+        "$K -n elearning patch ingress elearning-ingress --type=\"json\" --patch-file patch-ingress.json"
+      ],
+      "fix": [
+        "$K apply -n elearning -f k8s/ingress.yaml"
+      ],
+      "question": "Requests to my e-learning API at /api/ suddenly return an HTML error page instead of JSON, although all pods in namespace 'elearning' are Running. What is the root cause?",
+      "expected": "regula de Ingress trimite /api/ către serviciul frontend în loc de backend; corectarea regulii",
+      "evidence": {
+        "2": [{"type": "http_response", "target": "GET /api/", "http_path": "/api/"}],
+        "3": [{"type": "ingress_yaml", "target": "ingress/elearning/elearning-ingress", "kubectl": ["get", "ingress", "elearning-ingress", "-n", "elearning", "-o", "yaml"]}],
+        "4": [{"type": "svc_overview", "target": "ns/elearning", "kubectl": ["get", "svc", "-n", "elearning"]},
+              {"type": "ingress_describe", "target": "ingress/elearning/elearning-ingress", "kubectl": ["describe", "ingress", "elearning-ingress", "-n", "elearning"]}]
+      }
+    },
+    {
+      "id": "t12",
+      "title": "504 Gateway Timeout — backend lent + proxy-read-timeout mic (sugestii.docx)",
+      "break": [
+        "$K -n elearning annotate ingress elearning-ingress nginx.ingress.kubernetes.io/proxy-read-timeout=1 --overwrite",
+        "Set-Content -Path patch-slow.json -Value '[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/resources/limits/cpu\",\"value\":\"50m\"}]'",
+        "$K -n elearning patch deploy/backend --type=\"json\" --patch-file patch-slow.json",
+        "$K -n elearning rollout restart deploy/backend",
+        "# așteaptă backend-ul Ready, apoi verifică: curl.exe -i http://203.25.143.55/api/  → 504"
+      ],
+      "fix": [
+        "$K -n elearning annotate ingress elearning-ingress nginx.ingress.kubernetes.io/proxy-read-timeout-",
+        "$K apply -n elearning -f k8s/backend-deploy.yaml",
+        "$K -n elearning rollout restart deploy/backend"
+      ],
+      "question": "Requests to my e-learning API return 504 Gateway Time-out from nginx, but the backend pod in namespace 'elearning' is Running and Ready. What is the root cause and what should I do?",
+      "expected": "backend-ul răspunde mai lent decât proxy-read-timeout (throttling CPU + timeout 1s) → upstream timed out; mărirea timeout-ului și/sau a resurselor backend",
+      "evidence": {
+        "2": [{"type": "http_response", "target": "GET /api/", "http_path": "/api/"},
+              {"type": "pods_overview", "target": "ns/elearning", "kubectl": ["get", "pods", "-n", "elearning"]}],
+        "3": [{"type": "ingress_yaml", "target": "ingress/elearning/elearning-ingress", "kubectl": ["get", "ingress", "elearning-ingress", "-n", "elearning", "-o", "yaml"]}],
+        "4": [{"type": "pod_describe", "target": "deploy/elearning/backend", "kubectl": ["describe", "pod", "-n", "elearning", "-l", "app=backend"]}]
+      }
+    },
+    {
+      "id": "t13",
+      "title": "404 Not Found — host greșit în regula de Ingress (sugestii.docx)",
+      "break": [
+        "Set-Content -Path patch-host.json -Value '[{\"op\":\"add\",\"path\":\"/spec/rules/0/host\",\"value\":\"elearning.example.com\"}]'",
+        "$K -n elearning patch ingress elearning-ingress --type=\"json\" --patch-file patch-host.json",
+        "# verifică: curl.exe -i http://203.25.143.55/  → 404"
+      ],
+      "fix": [
+        "$K apply -n elearning -f k8s/ingress.yaml"
+      ],
+      "question": "My e-learning site suddenly returns 404 Not Found from nginx for every page, although all pods in namespace 'elearning' are Running and nothing was redeployed. What is the root cause?",
+      "expected": "regula de Ingress cere acum Host 'elearning.example.com', dar situl e accesat pe IP → nicio regulă nu se potrivește → 404 de la default backend; eliminarea host-ului sau accesarea pe URL-ul corect",
+      "evidence": {
+        "2": [{"type": "http_response", "target": "GET /", "http_path": "/"}],
+        "3": [{"type": "ingress_yaml", "target": "ingress/elearning/elearning-ingress", "kubectl": ["get", "ingress", "elearning-ingress", "-n", "elearning", "-o", "yaml"]}],
+        "4": [{"type": "ingress_describe", "target": "ingress/elearning/elearning-ingress", "kubectl": ["describe", "ingress", "elearning-ingress", "-n", "elearning"]}]
+      }
+    }
+  ]
+}

@@ -24,10 +24,32 @@ public class AiForwardingService {
 
     private static final Logger logger = LoggerFactory.getLogger(AiForwardingService.class);
     private static final int CONNECT_TIMEOUT_MS = 3_000;
-    // Inferenta pe CPU (llama3.1 8B) poate dura minute — 300s ca sa nu taie raspunsul.
+    // Raspunsurile lungi (gpt-oss-120b pe STS) pot dura — 300s ca sa nu taie raspunsul.
     private static final int READ_TIMEOUT_MS = 300_000;
 
-    public record ForwardResult(String text, String conversationId) {
+    /** Explicit outcome of a forward() call — no string-prefix sentinel values. */
+    public enum ErrorKind { NONE, HTTP, UNREACHABLE, INTERNAL }
+
+    public record ForwardResult(String text, String conversationId, ErrorKind errorKind, String httpStatus) {
+        public static ForwardResult ok(String text, String conversationId) {
+            return new ForwardResult(text, conversationId, ErrorKind.NONE, null);
+        }
+
+        public static ForwardResult httpError(String status, String conversationId) {
+            return new ForwardResult(null, conversationId, ErrorKind.HTTP, status);
+        }
+
+        public static ForwardResult unreachable(String conversationId) {
+            return new ForwardResult(null, conversationId, ErrorKind.UNREACHABLE, null);
+        }
+
+        public static ForwardResult internalError(String conversationId) {
+            return new ForwardResult(null, conversationId, ErrorKind.INTERNAL, null);
+        }
+
+        public boolean isError() {
+            return errorKind != ErrorKind.NONE;
+        }
     }
 
     private final RestTemplate restTemplate;
@@ -83,8 +105,9 @@ public class AiForwardingService {
     /**
      * Forward a user message to the AI server.
      *
-     * @return AI response text, or "__AI_HTTP_ERROR__<code>" on 4xx/5xx, or null if
-     *         unreachable.
+     * @return a {@link ForwardResult} whose {@code errorKind} distinguishes success
+     *         from HTTP errors (4xx/5xx), unreachable server and internal failures.
+     *         Returns {@code null} only for blank input.
      */
     public ForwardResult forward(String userIdValue, String conversationId, String userMessage, Object attachmentsObj,
             String requestId) {
@@ -184,24 +207,20 @@ public class AiForwardingService {
                 conversationId = aiConversationId;
             }
 
-            return new ForwardResult(extractAssistantText(resp), conversationId);
+            return ForwardResult.ok(extractAssistantText(resp), conversationId);
         } catch (HttpStatusCodeException e) {
             logger.error("[{}] AI Forward error {}: {}", requestId, e.getStatusCode(), e.getResponseBodyAsString());
-            return new ForwardResult("ERR:" + e.getStatusCode(), conversationId);
+            return ForwardResult.httpError(String.valueOf(e.getStatusCode().value()), conversationId);
         } catch (ResourceAccessException e) {
             logger.error("[{}] AI server unreachable", requestId, e);
-            return new ForwardResult("ERR:UNREACHABLE", conversationId);
+            return ForwardResult.unreachable(conversationId);
         } catch (RestClientException e) {
             logger.error("[{}] AI server forward failed", requestId, e);
-            return new ForwardResult("ERR:UNREACHABLE", conversationId);
+            return ForwardResult.unreachable(conversationId);
         } catch (Exception e) {
             logger.error("[{}] AI Forward exception", requestId, e);
-            return new ForwardResult("ERR:INTERNAL", conversationId);
+            return ForwardResult.internalError(conversationId);
         }
-    }
-
-    public boolean isAiHttpError(String response) {
-        return response != null && response.startsWith("__AI_HTTP_ERROR__");
     }
 
     public void submitFeedback(String conversationId, Integer score) {
@@ -212,10 +231,6 @@ public class AiForwardingService {
         } catch (Exception e) {
             logger.error("Failed to forward feedback for {}", conversationId, e);
         }
-    }
-
-    public String extractHttpErrorCode(String response) {
-        return response.substring("__AI_HTTP_ERROR__".length());
     }
 
     // -------------------------------------------------------------------------
@@ -231,18 +246,29 @@ public class AiForwardingService {
      */
     public Flux<ServerSentEvent<String>> forwardStream(
             String userMessage, Object attachmentsObj, String conversationId, String requestId) {
+        return forwardStream(userMessage, attachmentsObj, conversationId, requestId, true, false);
+    }
+
+    /**
+     * @param recordExchange same semantics as on {@link #forward}: false keeps the exchange
+     *                       out of qa_feedback (case-based retrieval).
+     * @param ephemeral      same semantics as on {@link #forward}: true persists nothing to
+     *                       history. Implies recordExchange=false.
+     */
+    public Flux<ServerSentEvent<String>> forwardStream(
+            String userMessage, Object attachmentsObj, String conversationId, String requestId,
+            boolean recordExchange, boolean ephemeral) {
         try {
             List<Map<String, Object>> artifacts = processIncomingAttachments(attachmentsObj, requestId);
 
             Map<String, Object> messageObj = Map.of("role", "user", "text", userMessage);
-            Map<String, Object> kdiag = (artifacts == null || artifacts.isEmpty())
-                    ? Map.of("protocol_version", "kdiag/1.0",
-                             "conversation_id", conversationId,
-                             "message", messageObj)
-                    : Map.of("protocol_version", "kdiag/1.0",
-                             "conversation_id", conversationId,
-                             "message", messageObj,
-                             "artifacts", artifacts);
+            Map<String, Object> kdiag = new LinkedHashMap<>();
+            kdiag.put("protocol_version", "kdiag/1.0");
+            kdiag.put("conversation_id", conversationId);
+            kdiag.put("message", messageObj);
+            kdiag.put("recordExchange", ephemeral ? false : recordExchange);
+            if (ephemeral) kdiag.put("ephemeral", true);
+            if (artifacts != null && !artifacts.isEmpty()) kdiag.put("artifacts", artifacts);
 
             return getStreamingWebClient().post()
                     .uri(aiServerBaseUrl + "/v1/chat/stream")

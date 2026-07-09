@@ -1,0 +1,12 @@
+test,titlu,prompturi_pana_la_diagnostic,timp_ai_total_s,remediere,halucinatie
+t01,Backend CrashLoopBackOff — parolă DB greșită,2,29.9,2,0
+t02,Frontend ImagePullBackOff — imagine inexistentă,2,84.6,2,0
+t03,Postgres Pending — nodeSelector invalid,3,49.7,2,0
+t05,FailedMount — ConfigMap lipsă,3,32.3,2,0
+t06,Ingress 503 — Service fără endpoints,4,87.0,1,0
+t07,DNS — Service name greșit (postgresX),2,16.0,2,0
+t08,OOMKilled — limită de memorie prea mică,3,34.8,1,0
+t09,Frontend CrashLoopBackOff — config Nginx invalid,2,12.8,2,0
+t11,Ingress — /api/ rutat greșit către frontend,1,93.1,2,0
+t13,404 Not Found — host greșit în regula de Ingress (sugestii.docx),3,89.8,2,0
+t04,PVC Pending — StorageClass inexistent,4,136.3,2,0

@@ -2,6 +2,7 @@ package com.example.controllers;
 
 import com.example.entities.ChatAttachment;
 import com.example.repositories.ChatAttachmentRepository;
+import com.example.security.CurrentUser;
 import com.example.utils.Utils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -13,16 +14,29 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/chat/attachments")
-@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class AttachmentController {
 
     @Autowired
     private ChatAttachmentRepository attachmentRepository;
 
+    /**
+     * Ownership check: attachment ids are sequential Longs, trivially enumerable,
+     * so without this any authenticated user could read anyone's file contents.
+     * Same convention as conversation endpoints: 404 (not 403) so the API doesn't
+     * leak which ids exist. When there is no authenticated principal (direct calls
+     * in tests), the check is skipped — same fallback as CurrentUser.resolve().
+     */
+    private boolean notOwner(ChatAttachment a) {
+        Long tokenUserId = CurrentUser.id();
+        if (tokenUserId == null)
+            return false;
+        return a.getUser() == null || !tokenUserId.equals(a.getUser().getId());
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<?> getAttachmentMeta(@PathVariable Long id) {
         Optional<ChatAttachment> opt = attachmentRepository.findById(id);
-        if (opt.isEmpty())
+        if (opt.isEmpty() || notOwner(opt.get()))
             return ResponseEntity.status(404).body(Map.of("message", "Attachment not found"));
         ChatAttachment a = opt.get();
         return ResponseEntity.ok(Map.of(
@@ -38,7 +52,7 @@ public class AttachmentController {
     @GetMapping("/{id}/content")
     public ResponseEntity<?> getAttachmentContent(@PathVariable Long id) {
         Optional<ChatAttachment> opt = attachmentRepository.findById(id);
-        if (opt.isEmpty())
+        if (opt.isEmpty() || notOwner(opt.get()))
             return ResponseEntity.status(404).body(Map.of("message", "Attachment not found"));
         ChatAttachment a = opt.get();
 

@@ -50,8 +50,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 Claims claims = jwtService.parseClaims(token);
                 String username = claims.getSubject();
                 if (username != null && !username.isBlank()) {
+                    // The uid claim is serialized as a JSON number; JJWT may deserialize it
+                    // as Integer or Long depending on magnitude — go through Number.
+                    Long userId = null;
+                    Object uidClaim = claims.get(JwtService.CLAIM_USER_ID);
+                    if (uidClaim instanceof Number n) {
+                        userId = n.longValue();
+                    }
                     UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-                            username, null, Collections.emptyList());
+                            new AuthenticatedUser(userId, username), null, Collections.emptyList());
                     auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(auth);
                 }

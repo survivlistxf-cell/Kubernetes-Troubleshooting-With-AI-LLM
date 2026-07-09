@@ -153,7 +153,7 @@ public class KubectlService {
 
             return process.exitValue() == 0;
         } catch (Exception e) {
-            System.err.println("kubectl quick check failed: " + e.getMessage());
+            logger.warn("kubectl quick check failed: {}", e.getMessage());
             return false;
         }
     }
@@ -197,7 +197,10 @@ public class KubectlService {
                     while ((line = reader.readLine()) != null) {
                         output.append(line).append("\n");
                     }
-                } catch (Exception ignored) {
+                } catch (Exception readErr) {
+                    // Best-effort: the stream may close abruptly when the process is killed
+                    // on timeout, but at DEBUG the cause is still traceable.
+                    logger.debug("kubectl output reader stopped: {}", readErr.getMessage());
                 }
             });
             readerThread.start();
@@ -207,14 +210,14 @@ public class KubectlService {
             if (!finished) {
                 process.destroyForcibly();
                 readerThread.interrupt();
-                System.err.println("Command timeout after " + timeoutSeconds + " seconds: " + commandArgs);
+                logger.error("Command timeout after {} seconds: {}", timeoutSeconds, commandArgs);
                 return null;
             }
 
             readerThread.join(1000);
             return output.toString();
         } catch (Exception e) {
-            System.err.println("Error executing command with timeout: " + e.getMessage());
+            logger.error("Error executing command with timeout: {}", e.getMessage(), e);
             return null;
         }
     }

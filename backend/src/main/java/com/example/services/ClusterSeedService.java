@@ -2,6 +2,8 @@ package com.example.services;
 
 import com.example.entities.ClusterConfig;
 import com.example.repositories.ClusterConfigRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
@@ -20,6 +22,8 @@ import java.nio.file.Paths;
 @Service
 public class ClusterSeedService {
 
+    private static final Logger logger = LoggerFactory.getLogger(ClusterSeedService.class);
+
     private final ClusterConfigRepository clusterRepo;
     private final KubectlService kubectlService;
 
@@ -32,7 +36,7 @@ public class ClusterSeedService {
     public void seedDefaultCluster() {
         // Only seed if there are no clusters at all
         if (clusterRepo.count() > 0) {
-            System.out.println("[ClusterSeed] Clusters already exist in DB, skipping auto-seed.");
+            logger.info("[ClusterSeed] Clusters already exist in DB, skipping auto-seed.");
             return;
         }
 
@@ -40,11 +44,11 @@ public class ClusterSeedService {
         Path path = Paths.get(kubeconfigPath);
 
         if (!Files.exists(path)) {
-            System.out.println("[ClusterSeed] No kubeconfig found at " + kubeconfigPath + ", skipping auto-seed.");
+            logger.info("[ClusterSeed] No kubeconfig found at {}, skipping auto-seed.", kubeconfigPath);
             return;
         }
 
-        System.out.println("[ClusterSeed] Auto-seeding default cluster from: " + kubeconfigPath);
+        logger.info("[ClusterSeed] Auto-seeding default cluster from: {}", kubeconfigPath);
 
         ClusterConfig defaultCluster = new ClusterConfig();
         defaultCluster.setName("default-cluster");
@@ -55,6 +59,6 @@ public class ClusterSeedService {
         defaultCluster.setActive(true);
 
         clusterRepo.save(defaultCluster);
-        System.out.println("[ClusterSeed] Default cluster seeded successfully with namespace 'elearning'.");
+        logger.info("[ClusterSeed] Default cluster seeded successfully with namespace 'elearning'.");
     }
 }

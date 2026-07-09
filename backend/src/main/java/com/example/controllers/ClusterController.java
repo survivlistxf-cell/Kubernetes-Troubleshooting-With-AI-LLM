@@ -20,7 +20,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/clusters")
-@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class ClusterController {
 
     private static final Logger logger = LoggerFactory.getLogger(ClusterController.class);
@@ -57,7 +56,7 @@ public class ClusterController {
         try {
             Files.createDirectories(this.kubeconfigStorageDir);
         } catch (IOException e) {
-            System.err.println("Warning: could not create kubeconfig storage dir: " + e.getMessage());
+            logger.warn("Could not create kubeconfig storage dir: {}", e.getMessage());
         }
     }
 
@@ -224,7 +223,7 @@ public class ClusterController {
                 Files.deleteIfExists(filePath);
             }
         } catch (Exception e) {
-            System.err.println("Warning: could not delete kubeconfig file: " + e.getMessage());
+            logger.warn("Could not delete kubeconfig file: {}", e.getMessage());
         }
 
         clusterRepo.deleteById(id);

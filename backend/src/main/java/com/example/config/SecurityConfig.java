@@ -28,6 +28,9 @@ public class SecurityConfig {
         http
             // Stateless JWT API: no server-side session, CSRF not applicable.
             .csrf(csrf -> csrf.disable())
+            // Applies the global corsConfigurationSource bean (allowlist, not *).
+            // Controllers no longer carry @CrossOrigin — one source of truth.
+            .cors(org.springframework.security.config.Customizer.withDefaults())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             // NOTE: antMatcher(...) is used instead of plain string patterns. With more than
             // one servlet in the context (e.g. the H2 console's JakartaWebServlet next to

@@ -2,6 +2,8 @@ package com.example.services;
 
 import com.example.entities.User;
 import com.example.repositories.UserRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -20,6 +22,8 @@ import org.springframework.stereotype.Component;
 @Order(1)
 public class DefaultUserSeeder implements CommandLineRunner {
 
+    private static final Logger logger = LoggerFactory.getLogger(DefaultUserSeeder.class);
+
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
 
@@ -31,7 +35,7 @@ public class DefaultUserSeeder implements CommandLineRunner {
     @Override
     public void run(String... args) {
         if (userRepository.count() > 0) {
-            System.out.println("[UserSeed] Users already exist, skipping default-user seed.");
+            logger.info("[UserSeed] Users already exist, skipping default-user seed.");
             return;
         }
 
@@ -45,8 +49,8 @@ public class DefaultUserSeeder implements CommandLineRunner {
         user.setPassword(passwordEncoder.encode(password));
         user = userRepository.save(user);
 
-        System.out.println("[UserSeed] Seeded default user id=" + user.getId()
-                + " (email=" + email + "). Default password is '" + password
-                + "' — override via DEFAULT_USER_PASSWORD and change it.");
+        logger.info("[UserSeed] Seeded default user id={} (email={}). "
+                + "Password comes from DEFAULT_USER_PASSWORD (default 'admin') — change it for non-local deployments.",
+                user.getId(), email);
     }
 }

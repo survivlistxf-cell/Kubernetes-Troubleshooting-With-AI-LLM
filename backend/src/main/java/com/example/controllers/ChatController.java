@@ -1,9 +1,8 @@
 package com.example.controllers;
 
-import com.example.entities.Chat;
 import com.example.entities.Conversation;
 import com.example.entities.User;
-import com.example.repositories.UserRepository;
+import com.example.security.CurrentUser;
 import com.example.services.AiForwardingService;
 import com.example.services.ChatService;
 import com.example.utils.Utils;
@@ -20,26 +19,29 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/chat")
-@CrossOrigin(origins = "*", allowedHeaders = "*")
 public class ChatController {
 
     private static final Logger logger = LoggerFactory.getLogger(ChatController.class);
 
     private final ChatService chatService;
     private final AiForwardingService aiService;
-    private final UserRepository userRepository;
 
-    public ChatController(ChatService chatService, AiForwardingService aiService, UserRepository userRepository) {
+    public ChatController(ChatService chatService, AiForwardingService aiService) {
         this.chatService = chatService;
         this.aiService = aiService;
-        this.userRepository = userRepository;
     }
 
     @PostMapping
     public ResponseEntity<?> chat(@RequestBody Map<String, Object> request) {
         String requestId = UUID.randomUUID().toString(); // id pentru mesaj, pentru a putea fi traced back, unic per
                                                          // mesaj, este efemer, nu persista in baza de date
-        String userId = Utils.asString(request.get("userId"));
+        // userId-ul efectiv vine din JWT (claim uid); valoarea din body e acceptata
+        // doar daca coincide — altfel 403 (IDOR prevention).
+        Long effectiveUserId = CurrentUser.resolve(Utils.asString(request.get("userId")));
+        if (effectiveUserId == null && CurrentUser.id() != null) {
+            return ResponseEntity.status(403).body(Map.of("message", "userId does not match authenticated user"));
+        }
+        String userId = effectiveUserId != null ? String.valueOf(effectiveUserId) : null;
         String userMessage = Utils.extractUserMessage(request);
         String conversationId = Utils.asString(request.get("conversationId")); // identificatorul intregii conversatii,
                                                                                // apare in baza de date
@@ -54,23 +56,30 @@ public class ChatController {
         // Forward to AI server
         AiForwardingService.ForwardResult forwardResult = aiService.forward(userId, conversationId, userMessage,
                 attachmentsObj, requestId);
-        String aiResponse = forwardResult != null ? forwardResult.text() : null;
         if (forwardResult != null && forwardResult.conversationId() != null) {
             conversationId = forwardResult.conversationId();
         }
 
-        if (aiService.isAiHttpError(aiResponse)) {
+        // AI server-ul a raspuns, dar cu 4xx/5xx: nu salvam nimic, semnalam clientului.
+        if (forwardResult != null && forwardResult.errorKind() == AiForwardingService.ErrorKind.HTTP) {
             return ResponseEntity.status(502).body(Map.of(
                     "message", "AI backend rejected the request",
-                    "status", aiService.extractHttpErrorCode(aiResponse)));
+                    "status", forwardResult.httpStatus()));
         }
 
-        if (aiResponse == null) {
-            logger.warn("[{}] AI forward unavailable; using legacy fallback", requestId);
-            aiResponse = chatService.generateFallbackResponse(userMessage);
-        } else {
-            logger.info("[{}] AI forward OK", requestId);
+        String aiResponse = forwardResult != null ? forwardResult.text() : null;
+
+        // UNREACHABLE / INTERNAL sau raspuns gol: nu inventam o diagnoza in gateway.
+        // Degradarea gratioasa reala e in AI server (AiEngine.fallbackAnswer); daca nici
+        // acela nu raspunde, utilizatorul trebuie sa afle ca serviciul e indisponibil,
+        // nu sa primeasca un raspuns generic salvat in istoric ca si cum ar fi o diagnoza.
+        if (aiResponse == null || aiResponse.isBlank()) {
+            logger.warn("[{}] AI server unavailable (kind={}); returning 503", requestId,
+                    forwardResult != null ? forwardResult.errorKind() : "NO_RESULT");
+            return ResponseEntity.status(503).body(Map.of(
+                    "message", "AI service is temporarily unavailable. Please try again in a moment."));
         }
+        logger.info("[{}] AI forward OK", requestId);
 
         // Salveaza conversatia in baza de date
         Map<String, Object> persistResult = chatService.persistChat(userId, conversationId, userMessage, aiResponse,
@@ -122,7 +131,12 @@ public class ChatController {
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> stream(@RequestBody Map<String, Object> request) {
         String requestId = UUID.randomUUID().toString();
-        String userId = Utils.asString(request.get("userId"));
+        Long effectiveUserId = CurrentUser.resolve(Utils.asString(request.get("userId")));
+        if (effectiveUserId == null && CurrentUser.id() != null) {
+            return Flux.just(ServerSentEvent.<String>builder()
+                    .event("error").data("userId does not match authenticated user").build());
+        }
+        String userId = effectiveUserId != null ? String.valueOf(effectiveUserId) : null;
         String userMessage = Utils.extractUserMessage(request);
         String conversationId = Utils.asString(request.get("conversationId"));
         Object attachmentsObj = request.get("attachments");
@@ -195,58 +209,19 @@ public class ChatController {
         }
     }
 
-    @PostMapping("/context")
-    public ResponseEntity<?> ingestContext(@RequestBody Object request) {
-        try {
-            String json = new ObjectMapper().writeValueAsString(request);
-            String userIdValue = null;
-            if (request instanceof Map<?, ?> map) {
-                Object direct = map.get("user_id");
-                if (direct == null)
-                    direct = map.get("userId");
-                if (direct != null)
-                    userIdValue = String.valueOf(direct);
-            }
-
-            if (userIdValue != null) {
-                try {
-                    Long uid = Long.parseLong(userIdValue);
-                    userRepository.findById(uid).ifPresent(user -> chatService.saveSimpleChat(user, json, "[context]"));
-                } catch (NumberFormatException ignored) {
-                }
-            }
-
-            return ResponseEntity.ok(Map.of("message", "Context received", "persisted", userIdValue != null));
-        } catch (Exception e) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("message", "Failed to ingest context", "error", e.getMessage()));
-        }
-    }
-
-    // ── Save chat (legacy) ──
-
-    @PostMapping("/save")
-    public ResponseEntity<?> saveChat(@RequestBody Map<String, String> request) {
-        String userId = request.get("userId");
-        String userMessage = request.get("userMessage");
-        String aiResponse = request.get("aiResponse");
-
-        if (userId == null || userMessage == null || aiResponse == null) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Missing required fields"));
-        }
-
-        Optional<User> userOpt = userRepository.findById(Long.parseLong(userId));
-        if (userOpt.isEmpty())
-            return ResponseEntity.badRequest().body(Map.of("message", "User not found"));
-
-        Chat saved = chatService.saveSimpleChat(userOpt.get(), userMessage, aiResponse);
-        return ResponseEntity.ok(Map.of("message", "Chat saved successfully", "chatId", saved.getId()));
-    }
+    // NOTE: ingestia de context structurat (kdiag/1.0) traieste exclusiv in
+    // ContextController (POST /api/context) — duplicatul de aici a fost eliminat
+    // ca sa existe o singura implementare de intretinut. La fel si POST /save
+    // (legacy): scria in DB fara conversatie si nu era apelat de nimeni.
 
     // ── Conversations list ──
 
     @GetMapping("/conversations")
-    public ResponseEntity<?> listConversations(@RequestParam Long userId) {
+    public ResponseEntity<?> listConversations(@RequestParam(required = false) Long userId) {
+        userId = CurrentUser.resolve(userId);
+        if (userId == null) {
+            return ResponseEntity.status(403).body(Map.of("message", "userId does not match authenticated user"));
+        }
         Optional<User> userOpt = chatService.findUser(userId);
         if (userOpt.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("message", "User not found"));
@@ -258,10 +233,15 @@ public class ChatController {
     // ── Conversation messages (resume) ──
 
     @GetMapping("/conversation/{conversationId}/messages")
-    public ResponseEntity<?> getConversationMessages(@PathVariable String conversationId, @RequestParam Long userId) {
+    public ResponseEntity<?> getConversationMessages(@PathVariable String conversationId,
+            @RequestParam(required = false) Long userId) {
         if (conversationId == null || conversationId.isBlank())
             return ResponseEntity.badRequest().body(Map.of("message", "conversationId required"));
 
+        userId = CurrentUser.resolve(userId);
+        if (userId == null) {
+            return ResponseEntity.status(403).body(Map.of("message", "userId does not match authenticated user"));
+        }
         Optional<User> userOpt = chatService.findUser(userId);
         if (userOpt.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("message", "User not found"));
@@ -279,12 +259,11 @@ public class ChatController {
             result.put("count", chatDtos.size());
             return ResponseEntity.ok(result);
         } catch (Exception e) {
-            java.io.StringWriter sw = new java.io.StringWriter();
-            e.printStackTrace(new java.io.PrintWriter(sw));
+            // Stack trace-ul ramane doar in log — nu expunem structura interna clientului.
+            logger.error("Failed to load conversation messages for conv={}", conversationId, e);
             return ResponseEntity.status(500).body(Map.of(
                     "error", "Internal Server Error",
-                    "message", e.getMessage() != null ? e.getMessage() : "null",
-                    "trace", sw.toString()));
+                    "message", "Failed to load conversation messages"));
         }
     }
 
@@ -294,6 +273,15 @@ public class ChatController {
     public ResponseEntity<?> deleteConversation(@PathVariable String conversationId) {
         if (conversationId == null || conversationId.isBlank())
             return ResponseEntity.badRequest().body(Map.of("message", "conversationId required"));
+
+        // Ownership check: only the owner (from the JWT) may delete a conversation.
+        // 404 (not 403) so the endpoint doesn't leak which conversation ids exist.
+        Long tokenUserId = CurrentUser.id();
+        if (tokenUserId != null) {
+            Conversation conv = chatService.findConversation(conversationId).orElse(null);
+            if (conv != null && (conv.getUser() == null || !tokenUserId.equals(conv.getUser().getId())))
+                return ResponseEntity.status(404).body(Map.of("message", "Conversation not found"));
+        }
 
         try {
             boolean existed = chatService.conversationExists(conversationId);
@@ -309,9 +297,15 @@ public class ChatController {
 
     @PatchMapping("/conversation/{conversationId}/title")
     public ResponseEntity<?> updateConversationTitle(
-            @PathVariable String conversationId, @RequestParam Long userId, @RequestBody Map<String, Object> body) {
+            @PathVariable String conversationId, @RequestParam(required = false) Long userId,
+            @RequestBody Map<String, Object> body) {
         if (conversationId == null || conversationId.isBlank())
             return ResponseEntity.badRequest().body(Map.of("message", "conversationId required"));
+
+        userId = CurrentUser.resolve(userId);
+        if (userId == null) {
+            return ResponseEntity.status(403).body(Map.of("message", "userId does not match authenticated user"));
+        }
 
         String title = Utils.asString(body.get("title"));
         if (title == null || title.isBlank())
@@ -334,9 +328,15 @@ public class ChatController {
     // ── Regenerate title ──
 
     @PostMapping("/conversation/{conversationId}/title:regenerate")
-    public ResponseEntity<?> regenerateTitle(@PathVariable String conversationId, @RequestParam Long userId) {
+    public ResponseEntity<?> regenerateTitle(@PathVariable String conversationId,
+            @RequestParam(required = false) Long userId) {
         if (conversationId == null || conversationId.isBlank())
             return ResponseEntity.badRequest().body(Map.of("message", "conversationId required"));
+
+        userId = CurrentUser.resolve(userId);
+        if (userId == null) {
+            return ResponseEntity.status(403).body(Map.of("message", "userId does not match authenticated user"));
+        }
 
         Optional<User> userOpt = chatService.findUser(userId);
         if (userOpt.isEmpty())
@@ -355,7 +355,15 @@ public class ChatController {
     public ResponseEntity<?> submitFeedback(@PathVariable String conversationId, @RequestBody Map<String, Integer> body) {
         Integer score = body.get("score");
         if (score == null) return ResponseEntity.badRequest().body(Map.of("message", "score required"));
-        
+
+        // Ownership check (same rationale as delete: 404, not 403).
+        Long tokenUserId = CurrentUser.id();
+        if (tokenUserId != null) {
+            Conversation conv = chatService.findConversation(conversationId).orElse(null);
+            if (conv != null && (conv.getUser() == null || !tokenUserId.equals(conv.getUser().getId())))
+                return ResponseEntity.status(404).body(Map.of("message", "Conversation not found"));
+        }
+
         chatService.updateFeedback(conversationId, score);
         aiService.submitFeedback(conversationId, score);
         return ResponseEntity.ok(Map.of("success", true));

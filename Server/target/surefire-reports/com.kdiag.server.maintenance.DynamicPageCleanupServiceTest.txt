@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: com.kdiag.server.maintenance.DynamicPageCleanupServiceTest
--------------------------------------------------------------------------------
-Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.757 s -- in com.kdiag.server.maintenance.DynamicPageCleanupServiceTest

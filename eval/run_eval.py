@@ -265,7 +265,10 @@ def ask(ai_url, question, artifacts):
     resp = http_json("POST", f"{ai_url}/v1/chat", payload, timeout=CHAT_TIMEOUT_S)
     elapsed = time.time() - t0
     text = (resp.get("assistant_message") or {}).get("text", "") if isinstance(resp, dict) else ""
-    return text, elapsed
+    # URL-urile paginilor aduse efectiv de cautarea dinamica (None daca nu a cautat) —
+    # permit compararea citarilor modelului cu sursele reale (grounding verificabil).
+    fetched = resp.get("source_urls") if isinstance(resp, dict) else None
+    return text, elapsed, fetched or []
 
 
 def main():
@@ -362,9 +365,9 @@ def main():
             for run in range(1, args.runs + 1):
                 m_before = http_json("GET", f"{args.ai_url}/v1/metrics")
                 try:
-                    answer, elapsed = ask(args.ai_url, question, evidence_used)
+                    answer, elapsed, fetched_urls = ask(args.ai_url, question, evidence_used)
                 except Exception as e:
-                    answer, elapsed = f"__ERROR__: {e}", -1
+                    answer, elapsed, fetched_urls = f"__ERROR__: {e}", -1, []
                 m_after = http_json("GET", f"{args.ai_url}/v1/metrics")
                 ns_delta = (m_after.get("totalNeedsSearchTriggers", 0) or 0) - \
                            (m_before.get("totalNeedsSearchTriggers", 0) or 0)
@@ -372,18 +375,22 @@ def main():
                 rec = dict(scenario=sid, mode=mode, run=run,
                            latency_s=round(elapsed, 1), needs_search=ns_delta,
                            evidence_attached=bool(evidence_used),
+                           fetched_urls=fetched_urls,
                            question=question, expected=scen["expected"],
                            keywords=scen["keywords"], answer=answer)
                 results_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 results_f.flush()
 
                 ans_file = out_dir / f"{sid}_{mode}_run{run}.md"
+                fetched_line = ("**Fetched by dynamic search:** " + ", ".join(fetched_urls) + "\n\n") \
+                    if fetched_urls else ""
                 ans_file.write_text(
                     f"# {sid} | mode={mode} | run={run} | {rec['latency_s']}s | "
                     f"needs_search={ns_delta}\n\n**Q:** {question}\n\n"
-                    f"**Expected:** {scen['expected']}\n\n---\n\n{answer}\n",
+                    f"**Expected:** {scen['expected']}\n\n{fetched_line}---\n\n{answer}\n",
                     encoding="utf-8")
                 summary_rows.append([sid, mode, run, rec["latency_s"], ns_delta,
+                                     ";".join(fetched_urls),
                                      "", "", ""])  # coloane goale: notare manuală
                 print(f"    run {run}: {rec['latency_s']}s, needs_search={ns_delta}")
 
@@ -400,6 +407,7 @@ def main():
     with open(out_dir / "grading_sheet.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["scenario", "mode", "run", "latency_s", "needs_search",
+                    "linkuri_needs_search",
                     "cauza_corecta(0/1)", "remediere(0-2)", "halucinatie(0/1)"])
         w.writerows(summary_rows)
 

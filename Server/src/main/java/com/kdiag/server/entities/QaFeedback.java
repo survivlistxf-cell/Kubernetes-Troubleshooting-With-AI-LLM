@@ -7,39 +7,18 @@ import java.time.LocalDateTime;
  * Persists every (question, answer) exchange so that positive feedback can later
  * trigger embedding capture and case-based retrieval hints.
  *
- * <p><b>Embedding column design note (PGVECTOR-AWARE):</b> the {@code embedding}
- * column is logically a {@code vector(768)} from the pgvector extension, but it
- * is declared as plain {@code TEXT} in the JPA mapping so that {@code ddl-auto=update}
- * works on any vanilla PostgreSQL instance — including local dev installs that
- * don't have pgvector compiled in.  Hibernate 6 has no native vector type anyway,
- * so the field is treated as a String with {@code insertable=false, updatable=false}
- * and all reads/writes go through native queries in
- * {@link com.kdiag.server.repositories.QaFeedbackRepository}.
- *
- * <p><b>Switching back to native vector(768) once pgvector is installed:</b>
- * <ol>
- *   <li>Make sure the extension is available: {@code CREATE EXTENSION IF NOT EXISTS vector;}
- *       — done automatically by {@link com.kdiag.server.PgVectorExtensionInitializer}
- *       at boot when the binary is present.</li>
- *   <li>Change the {@code @Column} below from {@code columnDefinition = "TEXT"} back to
- *       {@code columnDefinition = "vector(768)"}.</li>
- *   <li>On an existing DB, also run a one-off migration:
- *       <pre>
- *       ALTER TABLE qa_feedback
- *         ALTER COLUMN embedding TYPE vector(768) USING NULL;
- *       CREATE INDEX IF NOT EXISTS qa_feedback_embedding_hnsw
- *         ON qa_feedback USING hnsw (embedding vector_cosine_ops)
- *         WHERE embedding IS NOT NULL;
- *       </pre>
- *       (the HNSW index is what makes the {@code findSimilarByEmbeddingWithDistance}
- *       query fast — without it, ANN search degrades to a full sequential scan).</li>
- * </ol>
- *
- * <p>While the column is plain {@code TEXT}, the native queries in
- * {@code QaFeedbackRepository} that use {@code CAST(... AS vector)} or the
- * {@code <=>} cosine-distance operator will fail at runtime — the feedback
- * similarity-retrieval feature is therefore effectively disabled.  The rest of
- * the application is unaffected: regular Q&amp;A logging still works.
+ * <p><b>Embedding column design note (PGVECTOR):</b> the {@code embedding} column
+ * is a native {@code vector(768)} (pgvector extension). Hibernate 6 has no vector
+ * type, so the field is mapped as a String with {@code insertable=false,
+ * updatable=false} and all reads/writes go through native queries in
+ * {@link com.kdiag.server.repositories.QaFeedbackRepository}. The column type and
+ * the HNSW cosine index are created by the versioned migration
+ * {@code db_migrations/2026-05-12_qa_feedback_pgvector.sql}; the extension itself
+ * ({@code CREATE EXTENSION IF NOT EXISTS vector}) is ensured at database init
+ * (init.sql / postgres-init-configmap) and both runtime images
+ * ({@code pgvector/pgvector:pg16}) ship it. The HNSW index is what makes the
+ * {@code findSimilarByEmbeddingWithDistance} query fast — without it, ANN search
+ * degrades to a full sequential scan.
  */
 @Entity
 @Table(name = "qa_feedback",
@@ -63,13 +42,9 @@ public class QaFeedback {
     private String aiResponse;
 
     /**
-     * Embedding value, stored as text literal {@code [d0,d1,...,d767]}.
-     * Never written by Hibernate; updated only via native query in {@link com.kdiag.server.repositories.QaFeedbackRepository}.
-     *
-     * <p>TEMPORARY FALLBACK: declared as {@code TEXT} so Hibernate's auto-DDL works on
-     * any Postgres instance.  TO RE-ENABLE PGVECTOR: change
-     * {@code columnDefinition = "TEXT"} → {@code columnDefinition = "vector(768)"}
-     * and run the ALTER TABLE migration described in the class javadoc above.
+     * pgvector {@code vector(768)} column (see class javadoc). Read as the text
+     * literal {@code [d0,d1,...,d767]}; never written by Hibernate — updated only
+     * via native query in {@link com.kdiag.server.repositories.QaFeedbackRepository}.
      */
     @Column(columnDefinition = "vector(768)", insertable = false, updatable = false)
     private String embedding;

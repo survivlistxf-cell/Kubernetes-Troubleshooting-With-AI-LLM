@@ -179,6 +179,23 @@ public final class KdiagModels {
         public void setActions_requested(List<ActionRequested> actions_requested) {
             this.actions_requested = actions_requested;
         }
+
+        public List<String> getSource_urls() {
+            return source_urls;
+        }
+
+        public void setSource_urls(List<String> source_urls) {
+            this.source_urls = source_urls;
+        }
+
+        /**
+         * URL-urile paginilor de documentație aduse de căutarea dinamică pentru acest
+         * răspuns (proactiv, prin pragul de relevanță, sau prin markerul [NEEDS_SEARCH:]).
+         * {@code null} când nu a avut loc nicio căutare — permite clientului/evaluării să
+         * distingă citările ancorate în pagini descărcate de link-urile din memoria modelului.
+         */
+        @JsonProperty("source_urls")
+        private List<String> source_urls;
     }
 
     public static class Message {

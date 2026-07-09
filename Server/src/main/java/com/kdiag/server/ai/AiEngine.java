@@ -181,7 +181,9 @@ public class AiEngine {
         solveService.saveAssistantResponseToHistory(conversationId, DRR.assistantText(), recordExchange,
                                         sourceUrls, userText, solveStart, solvePromptChars);
 
-        return new AiResult(DRR.assistantText(), null);
+        // Sursele merg si in raspunsul API (source_urls), ca sa fie trasabile per cerere
+        // (folosit de evaluare pentru a compara citarile modelului cu paginile aduse efectiv).
+        return new AiResult(DRR.assistantText(), null, sourceUrls);
     }
 
     // -------------------------------------------------------------------------
@@ -371,10 +373,17 @@ public class AiEngine {
     public static class AiResult {
         private final String assistantText;
         private final List<AiAction> actions;
+        /** URL-urile paginilor aduse de căutarea dinamică (proactivă sau prin marker); null dacă nu a căutat. */
+        private final List<String> sourceUrls;
 
         public AiResult(String assistantText, List<AiAction> actions) {
+            this(assistantText, actions, null);
+        }
+
+        public AiResult(String assistantText, List<AiAction> actions, List<String> sourceUrls) {
             this.assistantText = assistantText;
             this.actions = actions;
+            this.sourceUrls = sourceUrls;
         }
 
         public String getAssistantText() {
@@ -383,6 +392,10 @@ public class AiEngine {
 
         public List<AiAction> getActions() {
             return actions;
+        }
+
+        public List<String> getSourceUrls() {
+            return sourceUrls;
         }
     }
 

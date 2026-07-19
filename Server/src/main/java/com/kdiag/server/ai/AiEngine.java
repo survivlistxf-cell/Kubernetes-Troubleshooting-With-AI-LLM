@@ -89,6 +89,12 @@ public class AiEngine {
             logger.info("Relevance gate returned no context — proactive dynamic search for: {}",
                     userText != null && userText.length() > 80 ? userText.substring(0, 80) + "..." : userText);
             metrics.recordNeedsSearchTrigger();
+            // Interogarea = intrebarea utilizatorului, ca atare. Aceasta este varianta cu care
+            // au fost produse rezultatele din Capitolul 6 si care respecta descrierea din 4.5
+            // (cautarea porneste INAINTE de orice apel catre model). O rafinare posibila —
+            // distilarea intrebarii intr-o interogare scurta printr-un apel LLM separat — este
+            // lasata deliberat ca directie de dezvoltare: ar imbunatati precizia cautarii pe
+            // intrebari conversationale, dar ar introduce un apel LLM inaintea cautarii.
             KubernetesDynamicSearcher.SearchResult sr = dynamicSearcher.searchAndSave(
                     conversationId, userText,
                     BudgetComputing.dynamicDocCapFor(gpt.budgetInputChars()));

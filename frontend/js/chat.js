@@ -179,7 +179,38 @@ function makeCmdBlock(code, lang) {
   </div>`;
 }
 
-//afiseaza corect simbolurile din markdown 
+// Split a markdown table row into trimmed cell strings. Pipes inside
+// `inline code` are literal, and \| is an escaped literal pipe.
+function splitTableRow(line) {
+  const cells = [];
+  let cur = '';
+  let inTick = false;
+  for (let k = 0; k < line.length; k++) {
+    const ch = line[k];
+    if (ch === '`') { inTick = !inTick; cur += ch; continue; }
+    if (ch === '\\' && line[k + 1] === '|') { cur += '|'; k++; continue; }
+    if (ch === '|' && !inTick) { cells.push(cur.trim()); cur = ''; continue; }
+    cur += ch;
+  }
+  cells.push(cur.trim());
+  // Drop the empty cells produced by the leading/trailing bounding pipes.
+  if (cells.length && cells[0] === '') cells.shift();
+  if (cells.length && cells[cells.length - 1] === '') cells.pop();
+  return cells;
+}
+
+// Inside a table cell a command renders as a compact, click-to-copy inline
+// chip instead of a full-width command box (which would break the layout).
+function expandPlaceholdersInline(s) {
+  return s.replace(/<CMD_PLACEHOLDER data="([^"]*)">/g, (_, data) => {
+    const real = data.replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#039;/g, "'");
+    const safeAttr = real.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    return `<code class="inline-code cmd-inline" data-copy-code="${safeAttr}" title="Copy command">${escapeHtml(real)}</code>`;
+  });
+}
+
+//afiseaza corect simbolurile din markdown
 //**text** devine <strong>text</strong>, etc
 function renderMarkdown(text) {
   if (!text) return '';
@@ -219,12 +250,85 @@ function renderMarkdown(text) {
   const expandPlaceholders = (s) =>
     s.replace(/<CMD_PLACEHOLDER data="([^"]*)">/g, (_, code) => makeCmdBlock(code.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#039;/g, "'"), 'bash'));
 
+  const renderTableCell = (text) => expandPlaceholdersInline(renderInline(escapeHtml(text)));
+
+  // Parse a GitHub-style table starting at line `start`. Tolerates the backend
+  // occasionally splitting a single row across several physical lines and
+  // embedding a fenced code block inside a cell (collapsed to an inline command
+  // chip). Returns { html, next } or null when there is no table here.
+  const tryParseTable = (allLines, start) => {
+    const headerLine = allLines[start];
+    const sepLine = allLines[start + 1];
+    if (!headerLine || headerLine.indexOf('|') === -1 || sepLine == null) return null;
+    const sepCells = splitTableRow(sepLine);
+    if (sepCells.length < 2 || !sepCells.every(c => /^:?-+:?$/.test(c))) return null;
+
+    const numCols = sepCells.length;
+    const aligns = sepCells.map(c => {
+      const l = c.startsWith(':'), r = c.endsWith(':');
+      return (l && r) ? 'center' : r ? 'right' : l ? 'left' : '';
+    });
+
+    const headerCells = splitTableRow(headerLine);
+    while (headerCells.length < numCols) headerCells.push('');
+
+    const bodyRows = [];
+    let j = start + 2;
+    let buf = null; // accumulates one logical row across physical lines
+    while (j < allLines.length) {
+      const line = allLines[j];
+      if (line.trim() === '') {
+        if (buf === null) break; // blank line after a finished row ends the table
+        j++;                     // blank line inside a split row: ignore it
+        continue;
+      }
+      const fence = line.match(/^```(\w*)\s*$/);
+      if (fence) {
+        const codeLines = [];
+        j++;
+        while (j < allLines.length && allLines[j].trim() !== '```') { codeLines.push(allLines[j]); j++; }
+        j++; // consume the closing fence
+        buf = (buf === null ? '' : buf + ' ') + '`' + codeLines.join(' ').trim() + '`';
+        continue;
+      }
+      if (line.indexOf('|') === -1 && buf === null) break; // plain text ends the table
+      buf = (buf === null ? line : buf + ' ' + line);
+      const cells = splitTableRow(buf);
+      if (cells.length >= numCols) { bodyRows.push(cells.slice(0, numCols)); buf = null; }
+      j++;
+    }
+    if (buf !== null) {
+      const cells = splitTableRow(buf);
+      while (cells.length < numCols) cells.push('');
+      bodyRows.push(cells.slice(0, numCols));
+    }
+
+    let out = '<div class="md-table-wrap"><table class="md-table"><thead><tr>';
+    headerCells.slice(0, numCols).forEach((c, idx) => {
+      const a = aligns[idx] ? ` style="text-align:${aligns[idx]}"` : '';
+      out += `<th${a}>${renderTableCell(c)}</th>`;
+    });
+    out += '</tr></thead><tbody>';
+    bodyRows.forEach(row => {
+      out += '<tr>';
+      row.forEach((c, idx) => {
+        const a = aligns[idx] ? ` style="text-align:${aligns[idx]}"` : '';
+        out += `<td${a}>${renderTableCell(c)}</td>`;
+      });
+      out += '</tr>';
+    });
+    out += '</tbody></table></div>';
+    return { html: out, next: j };
+  };
+
   for (let i = 0; i < lines.length; i++) {
     let raw = lines[i];
 
     const fenceMatch = raw.match(/^```(\w*)\s*$/);
     if (fenceMatch && !inCodeBlock) {
-      flushList();
+      // Note: no flushList() here — a fenced block that appears between list
+      // items belongs to the list, so the <ol>/<ul> stays open and numbering
+      // continues across it.
       inCodeBlock = true;
       codeBlockLang = fenceMatch[1] || 'bash';
       codeBlockLines = [];
@@ -250,10 +354,23 @@ function renderMarkdown(text) {
     }
     if (inCodeBlock) { codeBlockLines.push(raw); continue; }
 
+    // Tables are parsed from the raw (unescaped) lines so cell pipes and
+    // embedded code fences can be split correctly. `tryParseTable` consumes
+    // every line of the table and tells us where to resume.
+    const tableResult = tryParseTable(lines, i);
+    if (tableResult) {
+      flushList();
+      html += tableResult.html;
+      i = tableResult.next - 1; // -1 because the for-loop will ++ it
+      continue;
+    }
+
     raw = escapeHtml(raw);
 
     if (raw.trim() === '') {
-      flushList();
+      // Keep an open list alive across blank lines; the next real block
+      // (paragraph, heading, table) is what closes it via flushList().
+      if (inList) continue;
       html += '<div style="height:0.4rem"></div>';
       continue;
     }
@@ -276,6 +393,14 @@ function renderMarkdown(text) {
     if (ulMatch) {
       if (!inList || listType !== 'ul') { flushList(); html += '<ul class="md-ul">'; inList = true; listType = 'ul'; }
       html += `<li>${expandPlaceholders(renderInline(ulMatch[1]))}</li>`;
+      continue;
+    }
+
+    // Indented text while a list is open is continuation of the current item,
+    // not the end of the list. Keeping the list open here preserves ordered
+    // numbering (1, 2, 3…) instead of restarting at 1 after each interruption.
+    if (inList && /^\s+\S/.test(raw)) {
+      html += `<div class="md-li-cont">${expandPlaceholders(renderInline(raw))}</div>`;
       continue;
     }
 

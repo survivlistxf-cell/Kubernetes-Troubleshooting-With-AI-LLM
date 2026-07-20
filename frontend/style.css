@@ -1006,6 +1006,44 @@ input[type="checkbox"] { accent-color: var(--brand-500); cursor: pointer; }
 }
 .code-block code { font: inherit; color: inherit; background: none; padding: 0; border: none; }
 
+/* The language label and copy button are chrome, not content — keep them out
+   of text selections so copying a message doesn't drag in "bashCopy code". */
+.code-block-header,
+.cmd-block-header { user-select: none; }
+
+/* Tables */
+.md-table-wrap { overflow-x: auto; margin: 0.7rem 0; }
+.md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.86rem;
+  border: 1px solid var(--border);
+}
+.md-table th,
+.md-table td {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.md-table thead th {
+  background: rgba(50, 108, 229, 0.08);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.md-table tbody tr:nth-child(even) td { background: rgba(148, 163, 184, 0.06); }
+
+/* Command shown inline inside a table cell: a compact, click-to-copy chip. */
+.cmd-inline {
+  cursor: pointer;
+  white-space: normal;
+  word-break: break-word;
+}
+.cmd-inline:hover { background: rgba(50, 108, 229, 0.18); }
+
+/* Text that continues a list item (kept inside the list so numbering holds). */
+.md-li-cont { margin: 0.15rem 0 0.4rem 1.4rem; }
+
 /* Feedback (thumbs) */
 .feedback-buttons {
   display: flex;
